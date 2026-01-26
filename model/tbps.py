@@ -219,13 +219,15 @@ class TBPS(nn.Module):
             dim=1, keepdim=True
         )
 
-    def forward(self, batch, alpha, weights=None):
+    def forward(self, batch, alpha, weights=None, current_epoch=None):
         """
-        Forward pass of the model.
+        Forward pass of the model with Curriculum Learning support.
 
         Args:
             batch (dict): A dictionary containing the input data.
-            Containing the following: ['pids', 'image_ids', 'images', 'aug_images', 'caption_input_ids', 'caption_attention_mask', 'ss_images1', 'ss_images2']
+            alpha (float): Soft label ratio.
+            weights (torch.Tensor, optional): Boosting weights.
+            current_epoch (int, optional): The current training epoch (0-indexed).
         """
         ret = dict()
 
@@ -239,6 +241,7 @@ class TBPS(nn.Module):
         logit_scale = self.backbone.logit_scale.exp()
         logit_scale.data = torch.clamp(logit_scale.data, max=100)
 
+        # --- ENCODING FEATURES ---
         if self.config.loss.get("MLM", None) or self.config.loss.get("Ring", None):
             image_pooler_output, image_last_hidden = self.encode_image(images, True)
             if self.config.loss.get("Ring", None):
@@ -257,7 +260,6 @@ class TBPS(nn.Module):
         strategy = self.config.loss.get("strategy", "auxiliary")
 
         # --- A. SimCLR (Self-Supervised) ---
-        # Always runs if enabled, independent of strategy
         if self.config.loss.get("SS", None):
             ss_images1_embed = self.simclr_mlp(self.encode_image(batch["ss_images1"]))
             ss_images2_embed = self.simclr_mlp(self.encode_image(batch["ss_images2"]))
@@ -271,8 +273,38 @@ class TBPS(nn.Module):
             )
             ret.update({"ss_loss": ss_loss})
 
-        # --- B.In-modal Circle Loss (Auxiliary ver 1)---
-        # Only runs in Auxiliary mode. In Intrinsic mode, it's merged into N-ITC.
+        # --- CURRICULUM WEIGHT CALCULATION ---
+        # Mặc định lấy weight từ config (cho static strategies)
+        target_circle_weight = self.config.loss.get("circle_loss_weight", 0.0)
+        current_circle_weight = target_circle_weight
+
+        # Logic Curriculum Learning [Cite: 10, 45]
+        if strategy == "auxiliary_cross_curriculum":
+            if current_epoch is None:
+                current_epoch = 0 # Fallback an toàn
+            
+            T_warmup = 5      # Epoch 0-5 (0-indexed)
+            T_ramp_len = 15   # 15 Epochs ramp-up
+            T_stable = 20     # Epoch > 20
+            Lambda_target = 0.1 # Hardcode target theo bài báo hoặc lấy từ config
+
+            if current_epoch <= T_warmup:
+                # Giai đoạn 1: Warm-up -> Tắt Circle Loss
+                current_circle_weight = 0.0
+            elif current_epoch <= T_stable:
+                # Giai đoạn 2: Ramp-up -> Tăng tuyến tính
+                # Epoch 6 -> (6-5)/15 * 0.1 = 0.006...
+                # Epoch 20 -> (20-5)/15 * 0.1 = 0.1
+                progress = (current_epoch - T_warmup) / T_ramp_len
+                current_circle_weight = progress * Lambda_target
+            else:
+                # Giai đoạn 3: Stable -> Giữ nguyên 0.1
+                current_circle_weight = Lambda_target
+            
+            # Lưu lại weight thực tế để log
+            ret.update({"circle_loss_weight": torch.tensor(current_circle_weight, device=image_pooler_output.device)})
+
+        # --- B. In-modal Circle Loss (Legacy Strategy 2) ---
         if strategy == "auxiliary" and self.config.loss.get("CIR", None):
             circle_m = self.config.loss.get("circle_margin", 0.25)
             circle_gamma = self.config.loss.get("circle_gamma", 64)
@@ -294,8 +326,7 @@ class TBPS(nn.Module):
             loss = (img_circle_loss + txt_circle_loss) / 2
             ret.update({"circle_loss": loss * self.config.loss.circle_loss_weight})
 
-        # --- C. No Circle loss ---
-        # Runs for Baseline and Auxiliary strategies
+        # --- C. Standard N-ITC (Legacy Strategies) ---
         if strategy in ["baseline", "auxiliary"] and self.config.loss.get("NITC", None):
             sim_targets = self.prepare_sim_targets(batch["pids"], self.use_sigmoid)
             image_pooler_output_stopped = (
@@ -318,7 +349,6 @@ class TBPS(nn.Module):
                 weights=weights,
             )
             
-            # Multi-View Supervision (MVS)
             if self.config.loss.get("MVS", None):
                 aug_images = batch["aug_images"]
                 aug_images_features = self.encode_image(aug_images)
@@ -341,13 +371,11 @@ class TBPS(nn.Module):
 
             ret.update({"nitc_loss": nitc_loss * self.config.loss.nitc_loss_weight})
 
-        # --- D. Intrinsic N-ITC (Sigmoid-Circle Mode) ---
-        # Replaces standard N-ITC with Intrinsic version NC-ITC
+        # --- D. Intrinsic N-ITC (Legacy Strategy 3) ---
         if strategy == "intrinsic":
             circle_m = self.config.loss.get("circle_margin", 0.35)
             circle_gamma = self.config.loss.get("circle_gamma", 80)
             
-            # Main Intrinsic Loss
             intrinsic_loss = objectives.compute_intrinsic_nitc(
                 image_features=image_pooler_output,
                 text_features=caption_pooler_output,
@@ -358,7 +386,6 @@ class TBPS(nn.Module):
                 gamma=circle_gamma
             )
             
-            # MVS for Intrinsic
             if self.config.loss.get("MVS", None):
                 aug_images = batch["aug_images"]
                 aug_images_features = self.encode_image(aug_images)
@@ -374,16 +401,13 @@ class TBPS(nn.Module):
                 )
                 intrinsic_loss = (intrinsic_loss + aug_intrinsic_loss) / 2
             
-            # Map intrinsic loss to 'nitc_loss' key for logger compatibility
             ret.update({"nitc_loss": intrinsic_loss * self.config.loss.nitc_loss_weight})
 
-        # --- E.  PURE CIRCLE LOSS (REPLACES N-ITC) ---
-        # Replaces completely N-ITC with Cross-Modal Circle Loss
+        # --- E. Pure Circle Loss (Legacy Strategy 4) ---
         if strategy == "circle_only":
             circle_m = self.config.loss.get("circle_margin", 0.25)
             circle_gamma = self.config.loss.get("circle_gamma", 128)
             
-            #Main Loss: Original Image <-> Text
             pure_circle_loss = objectives.compute_cross_modal_circle(
                 image_features=image_pooler_output,
                 text_features=caption_pooler_output,
@@ -398,7 +422,6 @@ class TBPS(nn.Module):
                 aug_images = batch["aug_images"]
                 aug_images_features = self.encode_image(aug_images)
                 
-                # MVS Loss: Augmented Image <-> Text
                 aug_circle_loss = objectives.compute_cross_modal_circle(
                     image_features=aug_images_features,
                     text_features=caption_pooler_output,
@@ -406,15 +429,15 @@ class TBPS(nn.Module):
                     m=circle_m,
                     gamma=circle_gamma
                 )
-                
                 final_loss = (pure_circle_loss + aug_circle_loss) / 2
 
-            # Map to 'nitc_loss' key so existing optimizers/loggers work without change
             ret.update({"nitc_loss": final_loss * self.config.loss.nitc_loss_weight})
         
-        # --- E2.  N-ITC + CROSS-MODAL CIRCLE AUXILIARY ---
-        # Vẫn chạy N-ITC làm chính, nhưng dùng Circle Loss đa phương thức để ép các mẫu khó
-        if strategy == "auxiliary_cross":
+        # --- E2. AUXILIARY CROSS-MODAL (Combined Static + Curriculum) ---
+        # Xử lý cho cả Mode 5 (Static) và Mode 6 (Curriculum)
+        if strategy in ["auxiliary_cross", "auxiliary_cross_curriculum"]:
+            
+            # 1. Luôn tính N-ITC (Loss nền tảng)
             if self.config.loss.get("NITC", None):
                 sim_targets = self.prepare_sim_targets(batch["pids"], self.use_sigmoid)
                 image_pooler_output_stopped = (
@@ -437,7 +460,6 @@ class TBPS(nn.Module):
                     weights=weights,
                 )
                 
-                # MVS cho N-ITC
                 if self.config.loss.get("MVS", None):
                     aug_images = batch["aug_images"]
                     aug_images_features = self.encode_image(aug_images)
@@ -460,11 +482,12 @@ class TBPS(nn.Module):
 
                 ret.update({"nitc_loss": nitc_loss * self.config.loss.nitc_loss_weight})
 
-            if self.config.loss.get("CIR", None):
+            # 2. Tính Circle Loss (Chỉ tính khi trọng số > 0 để tiết kiệm compute ở Warmup)
+            if self.config.loss.get("CIR", None) and current_circle_weight > 0:
                 circle_m = self.config.loss.get("circle_margin", 0.25)
-                circle_gamma = self.config.loss.get("circle_gamma", 64)
+                circle_gamma = self.config.loss.get("circle_gamma", 128)
                 
-                # Tính Circle Loss trực tiếp trên cặp Ảnh - Văn bản
+                # Cross-Modal Circle Loss gốc
                 cm_circle_loss = objectives.compute_cross_modal_circle(
                     image_features=image_pooler_output,
                     text_features=caption_pooler_output,
@@ -477,6 +500,7 @@ class TBPS(nn.Module):
 
                 # MVS cho Circle Loss
                 if self.config.loss.get("MVS", None):
+                    # Check nếu aug_features chưa được tính ở block N-ITC
                     if 'aug_images_features' not in locals():
                         aug_images = batch["aug_images"]
                         aug_images_features = self.encode_image(aug_images)
@@ -490,12 +514,16 @@ class TBPS(nn.Module):
                     )
                     final_circle_loss = (cm_circle_loss + aug_cm_circle_loss) / 2
 
-                # Gán vào key 'circle_loss' để cộng dồn vào tổng loss cuối cùng
-                ret.update({"circle_loss": final_circle_loss * self.config.loss.circle_loss_weight})
+                # Nhân với current_circle_weight (Đã xử lý logic động ở trên)
+                ret.update({"circle_loss": final_circle_loss * current_circle_weight})
+            
+            # Nếu đang trong giai đoạn warmup (weight=0), có thể log loss = 0 để tiện theo dõi
+            elif self.config.loss.get("CIR", None):
+                 ret.update({"circle_loss": torch.tensor(0.0, device=image_pooler_output.device, requires_grad=True)})
 
-        # --- F. Other Losses (CITC, RITC, ITC, SDM, CMPM, ID, MLM) ---
-        
-        # C-ITC:
+
+        # --- F. Other Losses ---
+        # C-ITC
         if self.config.loss.get("CITC", None):
             loss = objectives.compute_citc(
                 image_features=image_pooler_output,
@@ -523,7 +551,7 @@ class TBPS(nn.Module):
             )
             ret.update({"ritc_loss": loss * self.config.loss.ritc_loss_weight})
 
-        # ITC (Standard Softmax)
+        # ITC
         if self.config.loss.get("ITC", None):
             ret.update(
                 {
@@ -581,7 +609,6 @@ class TBPS(nn.Module):
                     )
                 }
             )
-            # Calculate accuracy metrics
             image_pred = torch.argmax(image_logits, dim=1)
             text_pred = torch.argmax(text_logits, dim=1)
             image_precision = (image_pred == batch["pids"]).float().mean()
