@@ -9,13 +9,13 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 import textwrap
 
-
 if not OmegaConf.has_resolver("tuple"):
     OmegaConf.register_new_resolver("tuple", lambda *args: tuple(args))
 
 if not OmegaConf.has_resolver("eval"):
     OmegaConf.register_new_resolver("eval", eval)
 
+# Import modules
 try:
     from safetensors.torch import load_file as load_safetensors
 except ImportError:
@@ -27,7 +27,9 @@ from lightning_data import TBPSDataModule
 from data.bases import ImageDataset, TextDataset
 
 # --- CONFIGURATION ---
-TARGET_PIDS = [np.int64(2006), np.int64(2616)]
+TARGET_PIDS = [np.int64(2000), np.int64(2003), np.int64(2006), np.int64(2006), 
+               np.int64(2015), np.int64(2024), np.int64(2024), np.int64(2024), 
+               np.int64(2030), np.int64(2033)]
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 64
@@ -60,7 +62,6 @@ def load_model(config_path, ckpt_path, enable_lora):
     if not enable_lora and "lora" in cfg: 
         del cfg["lora"]
     
-    
     dm = TBPSDataModule(cfg)
     dm.setup(stage='test')
     
@@ -76,17 +77,12 @@ def load_model(config_path, ckpt_path, enable_lora):
     model.to(DEVICE).eval()
     return model, dm
 
-# --- IMAGE PROCESSING  ---
+# --- IMAGE PROCESSING ---
 def denormalize(tensor, target_size=(256, 128)):
-    """
-    Chuyển tensor về ảnh numpy.
-    target_size=(Height, Width). Mặc định 256x128 cho ảnh người (Tỉ lệ 2:1)
-    """
-    # 1. Resize (Upscale) 
+    """Chuyển tensor về ảnh numpy, có resize."""
     if target_size is not None:
         tensor = F.interpolate(tensor.unsqueeze(0), size=target_size, mode='bicubic', align_corners=False).squeeze(0)
 
-    # 2. De-normalize (ImageNet stats)
     mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(tensor.device)
     std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(tensor.device)
     
@@ -151,6 +147,13 @@ def get_rank_results(model, dm, target_pids):
                 top_imgs = [gal_imgs[i] for i in topk_idx]
                 top_pids = [gal_pids[i].item() for i in topk_idx]
                 
+ 
+                gt_idx = (gal_pids == pid).nonzero(as_tuple=True)[0]
+                if len(gt_idx) > 0:
+                    gt_img = gal_imgs[gt_idx[0]] 
+                else:
+                    gt_img = None 
+
                 if 'caption_input_ids' in batch: raw_ids = batch['caption_input_ids'][idx]
                 else: raw_ids = batch['input_ids'][idx]
                     
@@ -160,18 +163,18 @@ def get_rank_results(model, dm, target_pids):
                     'caption': caption,
                     'top_imgs': top_imgs,
                     'top_pids': top_pids,
+                    'gt_img': gt_img, # Lưu ảnh GT
                     'is_correct': [p == pid for p in top_pids]
                 }
     return results
 
-# --- PLOTTING ---
 def plot_qualitative(base_res, ours_res, pids):
     print("🎨 Drawing Flipped Cases...")
     
     rows = len(pids)
-    cols = 7 
+    cols = 8 
     
-    fig, axes = plt.subplots(rows, cols, figsize=(20, 6 * rows))
+    fig, axes = plt.subplots(rows, cols, figsize=(22, 6 * rows))
     if rows == 1: axes = axes.reshape(1, -1)
     
     for r, pid in enumerate(pids):
@@ -182,18 +185,17 @@ def plot_qualitative(base_res, ours_res, pids):
         b_data = base_res[pid]
         o_data = ours_res[pid]
         
-        # 1. Text Query
+        # 1. Text Query (Cột 0)
         ax_txt = axes[r, 0]
         real_pid = pid + 1 
-        wrapped_text = "\n".join(textwrap.wrap(f"ID: {real_pid}\n{b_data['caption']}", width=25))
+        wrapped_text = "\n".join(textwrap.wrap(f"Query ID: {real_pid}\n(Model ID: {pid})\n\n{b_data['caption']}", width=25))
         ax_txt.text(0.5, 0.5, wrapped_text, ha='center', va='center', fontsize=14, family='serif')
         ax_txt.axis('off')
         
-        # 2. Baseline Images
+        # 2. Baseline Images (Cột 1-3)
         for i in range(3):
             ax = axes[r, 1+i]
             img = denormalize(b_data['top_imgs'][i], target_size=(256, 128))
-            
             ax.imshow(img, interpolation='bicubic') 
             
             is_correct = b_data['is_correct'][i]
@@ -206,12 +208,12 @@ def plot_qualitative(base_res, ours_res, pids):
                 
             ax.set_xticks([]); ax.set_yticks([])
             if r == 0 and i == 1: 
-                ax.set_title("Baseline (mSigLIP)\nFails to Retrieve", fontsize=16, fontweight='bold', pad=15, family='serif')
+                ax.set_title("Baseline (mSigLIP)", fontsize=16, fontweight='bold', pad=15, family='serif')
             
             ax.text(5, 25, f"Rank-{i+1}", color='white', fontweight='bold', fontsize=12,
                     bbox=dict(facecolor=color, alpha=0.8, pad=2, edgecolor='none'))
 
-        # 3. Ours Images
+        # 3. Ours Images (Cột 4-6)
         for i in range(3):
             ax = axes[r, 4+i]
             img = denormalize(o_data['top_imgs'][i], target_size=(256, 128))
@@ -227,10 +229,27 @@ def plot_qualitative(base_res, ours_res, pids):
                 
             ax.set_xticks([]); ax.set_yticks([])
             if r == 0 and i == 1: 
-                ax.set_title("Ours (LoRA + Circle)\nCorrectly Retrieves", fontsize=16, fontweight='bold', pad=15, family='serif')
+                ax.set_title("Ours (LoRA + Circle)", fontsize=16, fontweight='bold', pad=15, family ='serif')
             
             ax.text(5, 25, f"Rank-{i+1}", color='white', fontweight='bold', fontsize=12,
                     bbox=dict(facecolor=color, alpha=0.8, pad=2, edgecolor='none'))
+
+        ax_gt = axes[r, 7]
+        gt_tensor = o_data['gt_img'] 
+        
+        if gt_tensor is not None:
+            img_gt = denormalize(gt_tensor, target_size=(256, 128))
+            ax_gt.imshow(img_gt, interpolation='bicubic')
+            
+            for spine in ax_gt.spines.values():
+                spine.set_edgecolor('blue')
+                spine.set_linewidth(3)
+        else:
+            ax_gt.text(0.5, 0.5, "GT Missing", ha='center', va='center')
+        
+        ax_gt.set_xticks([]); ax_gt.set_yticks([])
+        if r == 0:
+            ax_gt.set_title("Ground Truth\n(Reference)", fontsize=16, fontweight='bold', pad=15, family ='serif')
 
     plt.tight_layout()
     plt.savefig("flipped_cases_visualization.png", dpi=300, bbox_inches='tight')

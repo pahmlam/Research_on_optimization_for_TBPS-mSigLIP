@@ -1,200 +1,128 @@
 
 ---
 
-# Optimizing Text-Based Person Search (TBPS) with Circle Loss & mSigLIP
+# Hard Negative-Aware Optimization for Multilingual TBPS via Adaptive Cross-Modal Circle Loss
 
+This repository contains the official implementation for the paper: **"Hard Negative-Aware Optimization for Multilingual Text-Based Person Search via Adaptive Cross-Modal Circle Loss"**.
 
-## Abstract
+## 📖 Abstract
 
-Text-Based Person Search (TBPS) aims to retrieve person images given natural language descriptions. While recent vision–language models such as SigLIP and its multilingual variant mSigLIP have shown strong cross-modal representation capabilities, their performance degrades when applied to low-resource languages such as Vietnamese. In this work, we investigate the limitations of the commonly used Normalized Image-Text Contrastive (N-ITC) loss under Vietnamese TBPS settings and propose integrating Circle Loss to enable adaptive hard-sample mining. We design and evaluate four integration strategies that combine Circle Loss with mSigLIP at both unimodal and cross-modal levels. Experiments on the VN3K dataset demonstrate consistent improvements over the baseline, particularly in Rank-1 accuracy and mAP, validating the effectiveness of Circle Loss for addressing both cross-modal and cross-lingual gaps.
+Multilingual Text-Based Person Search (TBPS) remains challenging in low-resource settings due to ambiguous cross-modal alignment. Although recent methods such as TBPS-mSigLIP employ noise-robust contrastive learning, they suffer from **limited gradient discrimination** between easy and hard negatives.
 
----
-
-## 1. Introduction
-
-Text-Based Person Search (TBPS) is a challenging cross-modal retrieval task that requires aligning visual person representations with textual descriptions. Recent approaches based on large-scale vision–language pretraining have achieved promising results; however, most are optimized for high-resource languages. For Vietnamese TBPS, two major challenges arise: (1) the cross-modal gap between image and text embeddings, and (2) the cross-lingual gap caused by linguistic differences from the pretraining corpus.
-
-The baseline TBPS-mSigLIP model employs the Normalized Image-Text Contrastive (N-ITC) loss. Although effective in general settings, N-ITC applies uniform penalties to all samples, limiting its ability to emphasize hard positives and hard negatives. This motivates the adoption of Circle Loss, which introduces adaptive re-weighting based on sample difficulty.
+To address this, we propose an efficient optimization framework that integrates **Cross-modal Circle Loss** with **Low-Rank Adaptation (LoRA)**. Circle Loss enhances fine-grained discrimination via adaptive pair-wise re-weighting, while LoRA stabilizes training by constraining optimization to a low-rank subspace. We further introduce a **Curriculum Hard-Mining Schedule** to balance alignment stability and discrimination. Experiments on the **VnPersonSearch** benchmark establish a new state-of-the-art **Rank@1 accuracy of 51.30%** with significantly fewer trainable parameters.
 
 ---
 
-## 2. Methodology
+## 🚀 Framework Architecture
 
-### 2.1 Problem Formulation
+We propose a unified framework constructed upon the **mSigLIP** foundation model. To bridge the gap in hard-negative mining, we incorporate an **Auxiliary Cross-Modal Circle Loss** for geometric refinement and utilize **LoRA** on the Transformer backbone (Query, Key, Value projections) to ensure optimization stability and memory efficiency (allowing **3x** larger batch sizes).
 
-Given an image–text pair $(I, T)$, TBPS aims to learn a joint embedding space where matched pairs have high similarity and mismatched pairs have low similarity. Let $s_p$ and $s_n$ denote similarity scores for positive and negative pairs, respectively.
+![Sơ đồ kiến trúc tổng thể](framework.png)
 
-### 2.2 Circle Loss
-
-Circle Loss introduces adaptive weighting factors that dynamically adjust the contribution of each similarity score during optimization. The loss is defined as:
-
-$$
-\mathcal{L}_{circle} = \log\left[1 + \sum \exp(\gamma \alpha_n s_n) \sum \exp(-\gamma \alpha_p s_p)\right]
-$$
-
-where $\gamma$ is a scale factor and $\alpha_p, \alpha_n$ control the relative importance of positive and negative pairs. This formulation encourages $s_p \to 1$ and $s_n \to 0$, while focusing training on hard samples.
+*Figure 1: The overall architecture of the proposed Multilingual TBPS framework. It features a dual-pathway optimization: (1) The baseline noise-robust objectives (N-ITC, etc.) for global alignment, and (2) An auxiliary Circle Loss branch for explicit hard-negative mining, stabilized by LoRA.*
 
 ---
 
-## 3. Integration Strategies
+## 💡 Key Contributions & Analysis
 
-We explore four strategies for integrating Circle Loss into the TBPS-mSigLIP framework:
+### 1. Theoretical Gradient Analysis
 
-### Strategy 1: In-Modal Auxiliary Optimization
+Why does mSigLIP fail on hard negatives? We analyze the gradient dynamics of the standard Sigmoid loss (N-ITC) versus our Circle Loss.
 
-Circle Loss is applied independently to the image and text branches as an auxiliary regularizer. This strategy promotes identity-level clustering within each unimodal embedding space prior to cross-modal alignment.
+![Gradients](gradient_3d_optimized_pub.png)
 
-### Strategy 2: Intrinsic N-ITC (NC-ITC)
+*Figure 2: Theoretical visualization of gradient magnitude. (Left) **N-ITC (Cyan)** exhibits vanishing gradients for semi-hard negatives (), leading to insensitivity. **Circle Loss (Red)** imposes a sharp penalty after the margin, effectively mining hard negatives. (Right) Circle Loss maintains strong signals for positive pairs even as they approach similarity 1.0, preventing premature convergence.*
 
-The sigmoid-based logit computation in N-ITC is modified using Circle Loss re-weighting, allowing direct optimization of the decision boundary.
+### 2. Geometric Refinement
 
-### Strategy 3: Pure Cross-Modal Circle Loss
+Our method transforms the embedding space geometry. By applying a **Curriculum Hard-Mining Schedule** (linearly warming up the Circle Loss weight), we prevent the disruption of early global alignment while enforcing strict spherical constraints in later stages.
 
-N-ITC is fully replaced by Cross-Modal Circle Loss, yielding embeddings with high inter-class separability.
+![Geometric](distribution_final_v5_pub.png)
 
-### Strategy 4: Hybrid N-ITC with Cross-Modal Auxiliary (Selected)
-
-The final strategy combines N-ITC as the main objective with an auxiliary Cross-Modal Circle Loss branch dedicated to hard-sample mining. Multi-View Supervision (MVS) is applied to both branches. This hybrid formulation achieves the best empirical performance and is adopted for final evaluation.
+*Figure 3: Geometric Analysis of Similarity Distribution ( vs. ). (Left) The Baseline distribution converges linearly to the decision boundary (), causing overlap. (Right) **Ours (LoRA + Circle)** lifts the distribution towards the theoretical margin (), creating a clear spherical boundary that separates correct matches from hard negatives.*
 
 ---
 
-## 4. Implementation Details
+## 📊 Experimental Results
 
-The project is implemented in PyTorch and structured as follows:
+We evaluate our method on **3000VnPersonSearch** (Low-resource, Vietnamese) and **CUHK-PEDES** (High-resource, English).
 
-* **model/objectives.py**: Loss function implementations, including pairwise Circle Loss, intrinsic N-ITC, and cross-modal Circle Loss.
-* **tbps.py**: Main model definition, forward pipeline, and loss strategy selection.
+### Quantitative Performance (VN3K)
 
-Additional techniques include LoRA-based fine-tuning, self-supervision, and multi-view supervision.
+Our method with Curriculum Learning achieves State-of-the-Art performance, significantly outperforming the full fine-tuning baseline despite using fewer parameters.
 
-**Hardware:** Intel Core i5-7600K, NVIDIA RTX 3060 12GB .
+| Method                       | R@1   | R@5   | R@10  | mAP   | mINP  |
+| ---------------------------- | ----- | ------| ----- | ----- | ----- |
+| TBPS-mSigLIP (Full FT)       | 49.70 | 75.93 | 84.75 | 54.96 | 48.66 |
+| Ours (LoRA Only)             | 49.90 | 78.05 | 86.30 | 55.83 | 49.45 |
+| Ours (LoRA + Circle Fixed)   | 50.53 | 77.78 | 86.43 | 55.94 | 49.37 |
+| **Ours (LoRA + Curriculum)** | **51.30** | **78.20** | **86.68** | **56.46** | **49.89** |
 
----
+### Qualitative Visualization
 
-## 5. Experiments
+The baseline often retrieves visually similar distractors (hard negatives). Our method successfully discriminates fine-grained attributes (e.g., shoe color, logo details).
 
-### 5.1 Datasets
+![Visualize](flipped_cases_visualization.png)
 
-Experiments are conducted on the 3000VNPersonSearch dataset, with additional evaluation on CUHK-PEDES for generalization analysis.
-
-### 5.2 Evaluation Metrics
-
-We report Rank@1, Rank@5, Rank@10, mean Average Precision (mAP), and mean Inverse Negative Penalty (mINP).
-
-### 5.3 Results
-
-The hybrid strategy consistently outperforms the baseline TBPS-mSigLIP model:
-
-```bash
-+------+-------+-------+-------+-------+-------+
-| Task |   R1  |   R5  |  R10  |  mAP  |  mINP |
-+------+-------+-------+-------+-------+-------+
-| t2i  | 50.53 | 77.78 | 86.43 | 55.94 | 49.37 |
-| i2t  | 52.35 | 77.55 | 86.20 | 48.97 | 33.27 |
-+------+-------+-------+-------+-------+-------+
-```
-
-* Rank@1: +0.83%
-* Rank@5: +1.85%
-* Rank@10: +1.68%
-* mAP: +0.98%
-* mINP: +0.71%
-
-Circle Loss parameters are set to Margin = 0.25 and Gamma = 128, combined with LoRA fine-tuning.
+*Figure 4: Qualitative comparison. Green boxes indicate correct matches; Red boxes are incorrect. Note how our method ranks the Ground Truth at #1 even in challenging cases where the baseline fails.*
 
 ---
 
-## References
+## 🛠️ Installation
 
-* Sun et al., *Circle Loss: A Unified Perspective of Pair Similarity Optimization*, CVPR 2020.
-
----
-
-## Setup
-
-### 0. Clone the repository
+### 1. Clone and Setup
 
 ```bash
 git clone https://github.com/pahmlam/Research_on_CircleLoss_for_TBPS-mSigLIP.git
-```
-
-### 1. Download the datasets
-
-```bash
+cd Research_on_CircleLoss_for_TBPS-mSigLIP
 ./setup.sh
+
 ```
 
-### 2. Install the `uv` package manager and sync dependencies
+### 2. Environment
+
+We recommend using `uv` for fast dependency management.
 
 ```bash
-cd PERSON_RLF
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
+
 ```
 
-### 3. Download the `siglip-base-patch16-256-multilingual` checkpoints
+### 3. Prepare Data & Checkpoints
+
+Download the `siglip-base-patch16-256-multilingual` checkpoints and organize your datasets (VN3K, CUHK-PEDES) in the root directory.
 
 ```bash
 uv run prepare_checkpoints.py
-```
 
-### 4. Place the CUHK-FULL dataset in the root directory
-
-Sample project structure:
-
-```bash
-.
-|-- clip_checkpoints
-|-- config
-|-- CUHK-PEDES          # Dataset folder for CUHK-PEDES
-|-- VN3K                # Dataset folder for VN3K
-|-- data
-|-- experiments
-|-- lightning_data.py
-|-- lightning_models.py
-|-- model
-|-- m_siglip_checkpoints
-|-- outputs
-|-- prepare_checkpoints.py
-|-- __pycache__
-|-- pyproject.toml
-|-- README.md
-|-- requirements.txt
-|-- run.sh
-|-- siglip_checkpoints
-|-- solver
-|-- trainer.py
-|-- utils
-|-- uv.lock
-|-- ...
-```
-
-### 5. Log in to Weights & Biases
-
-```bash
-uv run wandb login <API_KEY>
 ```
 
 ---
 
-## Running Experiments
+## 🏃 Training
 
-### 1. CUHK-FULL dataset
+To reproduce the results, use the provided scripts. We utilize LoRA to enable large batch sizes (BS=24 on 12GB VRAM).
+
+### Train with Curriculum Hard-Mining (Recommended)
+
+This runs the proposed method: LoRA + mSigLIP + Auxiliary Circle Loss with a warm-up schedule.
 
 ```bash
-# With m-SigLIP
-# Train with the TBPS method
-uv run trainer.py -cn m_siglip img_size_str="'(256,256)'" dataset=cuhk_pedes dataset.sampler=random loss.softlabel_ratio=0.0 trainer.max_epochs=60 optimizer=tbps_clip_no_decay optimizer.param_groups.default.lr=1e-5
-
-# Train with the IRRA method
-uv run trainer.py -cn m_siglip img_size_str="'(256,256)'" dataset=cuhk_pedes dataset.sampler=identity dataset.num_instance=1 loss=irra loss.softlabel_ratio=0.0 trainer.max_epochs=60 optimizer=irra_no_decay optimizer.param_groups.default.lr=1e-5
-
-# Run Circle Loss with LoRA fine-tuning
+# Run Circle Loss with LoRA fine-tuning and curriculum scheduling
 ./run_cir_loss.sh
 
-# Run Circle Loss with full fine-tuning
-./run_cir_full.sh
+```
+
+### Train Baseline (mSigLIP)
+
+```bash
+uv run trainer.py -cn m_siglip img_size_str="'(256,256)'" dataset=vn3k loss.softlabel_ratio=0.0 trainer.max_epochs=60
+
 ```
 
 ---
 
+## 📧 Contact
+
+For any questions, please open an issue or contact the authors.
