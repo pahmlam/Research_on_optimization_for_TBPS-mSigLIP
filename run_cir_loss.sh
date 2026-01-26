@@ -46,7 +46,7 @@ loss.softlabel_ratio=0.0
 case $choice in
 
 1)
-    echo ">>> Đang chạy MODE 1: BASELINE..."
+    echo ">>> RUNNING MODE 1: BASELINE..."
     uv run trainer.py -cn cir_msiglip \
         $COMMON_ARGS \
         loss.strategy=baseline \
@@ -58,7 +58,7 @@ case $choice in
     ;;
 
 2)
-    echo ">>> Đang chạy MODE 2: AUXILIARY (Kết hợp)..."
+    echo ">>> RUNNING MODE 2: AUXILIARY (Kết hợp)..."
     uv run trainer.py -cn cir_msiglip \
         $COMMON_ARGS \
         loss.strategy=auxiliary \
@@ -70,7 +70,7 @@ case $choice in
     ;;
 
 3)
-    echo ">>> Đang chạy MODE 3: INTRINSIC (Tích hợp sâu)..."
+    echo ">>> RUNNING MODE 3: INTRINSIC "
     uv run trainer.py -cn cir_msiglip \
         $COMMON_ARGS \
         loss.strategy=intrinsic \
@@ -82,9 +82,7 @@ case $choice in
     ;;
 
 4)
-    echo ">>> Đang chạy MODE 4: PURE CIRCLE (Thay thế hoàn toàn)..."
-    # Pure Circle: Tắt N-ITC chuẩn, dùng Cross-Modal Circle Loss
-    # Lưu ý: Vẫn set nitc_loss_weight=1.0 vì trong code ta gán kết quả vào key 'nitc_loss'
+    echo ">>> RUNNING MODE 4: PURE CIRCLE "
     uv run trainer.py -cn cir_msiglip \
         $COMMON_ARGS \
         loss.strategy=circle_only \
@@ -96,7 +94,7 @@ case $choice in
     ;;
 
 5)
-    echo ">>> Đang chạy MODE 5: AUXILIARY CROSS-MODAL (STATIC)..."
+    echo ">>> RUNNING MODE 5: AUXILIARY CROSS-MODAL (STATIC)..."
     uv run trainer.py -cn cir_msiglip \
         $COMMON_ARGS \
         loss.strategy=auxiliary_cross \
@@ -108,11 +106,7 @@ case $choice in
     ;;
 
 6)
-    echo ">>> Đang chạy MODE 6: CURRICULUM LEARNING (Cross-modal)..."
-    # Cấu hình:
-    # - strategy=auxiliary_cross_curriculum: Kích hoạt logic tính weight động.
-    # - circle_loss_weight: Giá trị này sẽ bị ghi đè bởi logic curriculum bên trong model, 
-    #   nhưng ta vẫn set 0.1 làm target reference (mặc dù logic code đã hardcode target theo yêu cầu).
+    echo ">>> RUNNING MODE 6: CURRICULUM LEARNING (Cross-modal)..."
     uv run trainer.py -cn cir_msiglip \
         $COMMON_ARGS \
         loss.strategy=auxiliary_cross_curriculum \

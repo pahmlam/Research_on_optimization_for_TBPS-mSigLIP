@@ -9,15 +9,13 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 import textwrap
 
-# --- FIX: REGISTER RESOLVERS IMMEDIATELY ---
+
 if not OmegaConf.has_resolver("tuple"):
     OmegaConf.register_new_resolver("tuple", lambda *args: tuple(args))
 
 if not OmegaConf.has_resolver("eval"):
     OmegaConf.register_new_resolver("eval", eval)
-# -------------------------------------------
 
-# Import modules
 try:
     from safetensors.torch import load_file as load_safetensors
 except ImportError:
@@ -62,7 +60,6 @@ def load_model(config_path, ckpt_path, enable_lora):
     if not enable_lora and "lora" in cfg: 
         del cfg["lora"]
     
-    # OmegaConf.resolve(cfg) <-- Đã xóa dòng gây lỗi này
     
     dm = TBPSDataModule(cfg)
     dm.setup(stage='test')
@@ -79,14 +76,13 @@ def load_model(config_path, ckpt_path, enable_lora):
     model.to(DEVICE).eval()
     return model, dm
 
-# --- IMAGE PROCESSING [ĐÃ SỬA: RESIZE VỀ KÍCH THƯỚC CHUẨN] ---
+# --- IMAGE PROCESSING  ---
 def denormalize(tensor, target_size=(256, 128)):
     """
     Chuyển tensor về ảnh numpy.
     target_size=(Height, Width). Mặc định 256x128 cho ảnh người (Tỉ lệ 2:1)
     """
-    # 1. Resize (Upscale) dùng Bicubic để ảnh mượt hơn, không bị vỡ hạt
-    # Tensor input: (C, H, W) -> Cần unsqueeze thành (1, C, H, W) cho hàm interpolate
+    # 1. Resize (Upscale) 
     if target_size is not None:
         tensor = F.interpolate(tensor.unsqueeze(0), size=target_size, mode='bicubic', align_corners=False).squeeze(0)
 
@@ -168,15 +164,13 @@ def get_rank_results(model, dm, target_pids):
                 }
     return results
 
-# --- PLOTTING [ĐÃ SỬA: TĂNG CHIỀU CAO FIGURE] ---
+# --- PLOTTING ---
 def plot_qualitative(base_res, ours_res, pids):
     print("🎨 Drawing Flipped Cases...")
     
     rows = len(pids)
     cols = 7 
     
-    # [FIX] Tăng chiều cao của Figure lên (6 * rows thay vì 4 * rows)
-    # Vì ảnh người là ảnh dọc (cao), cần không gian dọc lớn hơn để không bị bóp méo
     fig, axes = plt.subplots(rows, cols, figsize=(20, 6 * rows))
     if rows == 1: axes = axes.reshape(1, -1)
     
@@ -198,10 +192,8 @@ def plot_qualitative(base_res, ours_res, pids):
         # 2. Baseline Images
         for i in range(3):
             ax = axes[r, 1+i]
-            # [FIX] Gọi hàm denormalize mới (mặc định resize về 256x128)
             img = denormalize(b_data['top_imgs'][i], target_size=(256, 128))
             
-            # [FIX] aspect='auto' giúp ảnh điền đầy khung mà vẫn giữ tỉ lệ nếu khung hình hợp lý
             ax.imshow(img, interpolation='bicubic') 
             
             is_correct = b_data['is_correct'][i]

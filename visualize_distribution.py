@@ -7,39 +7,33 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 from data.bases import ImageDataset, TextDataset
 
-# --- [MOD] Import module để chỉnh font ---
 import matplotlib.font_manager as font_manager
 
 from lightning_models import LitTBPS
 from lightning_data import TBPSDataModule
 
-# Đăng ký resolver
 def resolve_tuple(*args): return tuple(args)
 try:
     OmegaConf.register_new_resolver("tuple", resolve_tuple)
     OmegaConf.register_new_resolver("eval", eval)
 except: pass
 
-# --- [MOD] Cấu hình Matplotlib cho chuẩn bài báo ---
 def set_publication_style():
     plt.rcParams.update({
-        'font.size': 16,           # Kích thước font cơ bản
-        'axes.labelsize': 20,      # Kích thước nhãn trục (sn, sp)
-        'axes.titlesize': 22,      # Kích thước tiêu đề biểu đồ
-        'xtick.labelsize': 16,     # Kích thước số trên trục x
-        'ytick.labelsize': 16,     # Kích thước số trên trục y
-        'legend.fontsize': 14,     # Kích thước chú thích
-        'figure.titlesize': 24,    # Tiêu đề toàn cục
-        'font.family': 'serif',    # Dùng font có chân (Serif)
-        'font.serif': ['Times New Roman', 'DejaVu Serif'], # Ưu tiên Times New Roman
-        'mathtext.fontset': 'stix', # Font công thức toán học đẹp hơn
-        'lines.linewidth': 2.5,     # Đường nét đậm hơn
-        'lines.markersize': 8,      # Marker to hơn
+        'font.size': 16,           
+        'axes.labelsize': 20,      
+        'axes.titlesize': 22,      
+        'xtick.labelsize': 16,     
+        'ytick.labelsize': 16,     
+        'legend.fontsize': 14,     
+        'figure.titlesize': 24,    
+        'font.family': 'serif',    
+        'font.serif': ['Times New Roman', 'DejaVu Serif'], 
+        'mathtext.fontset': 'stix', 
+        'lines.linewidth': 2.5,     
     })
 
-# Giữ nguyên hàm extract_test_scores không đổi
 def extract_test_scores(config_path, ckpt_path, device='cuda', enable_lora=None):
-    # (Giữ nguyên nội dung hàm này như code cũ của bạn)
     print(f"Loading model from: {ckpt_path}")
     config = OmegaConf.load(config_path)
     
@@ -117,24 +111,19 @@ def extract_test_scores(config_path, ckpt_path, device='cuda', enable_lora=None)
 
     return np.array(sp_list), np.array(sn_list)
 
-# --- [MOD] Hàm vẽ được chỉnh sửa ---
 def plot_analysis(ax, sp, sn, title, target_margin=None):
     total = len(sp)
     pass_rate = (np.sum(sp > sn) / total) * 100
     avg_gap = np.mean(sp - sn)
 
-    # Scatter: Tăng s (size) và giảm alpha để nhìn rõ mật độ hơn
     is_correct = sp > sn
-    # Tăng kích thước điểm (s=20) để dễ nhìn hơn trên hình lớn
     ax.scatter(sn[is_correct], sp[is_correct], s=20, c='green', alpha=0.15, label=r'Correct', edgecolors='none')
     ax.scatter(sn[~is_correct], sp[~is_correct], s=20, c='red', alpha=0.15, label=r'Incorrect', edgecolors='none')
     
-    # Centroid: Làm to nổi bật hẳn (s=300)
     ax.scatter(np.mean(sn), np.mean(sp), c='black', marker='X', s=300, edgecolors='white', linewidth=2, zorder=10, label='Centroid')
 
-    limit_max = 0.8 # Mở rộng nhẹ giới hạn để chữ không bị cắt
-    
-    # 1. Decision Boundary (y=x)
+    limit_max = 0.8 
+    # 1. y=x Line
     ax.plot([0, limit_max], [0, limit_max], 'k--', linewidth=2, label='y=x')
 
     # 2. Target Margin
@@ -160,22 +149,19 @@ def plot_analysis(ax, sp, sn, title, target_margin=None):
     # Label trục đậm hơn
     ax.set_xlabel(r'$s_n$ (Negative)', fontweight='bold')
     ax.set_ylabel(r'$s_p$ (Positive)', fontweight='bold')
-    ax.set_title(title, pad=15, fontweight='bold') # Pad để đẩy title lên cao một chút
+    ax.set_title(title, pad=15, fontweight='bold')
     
     ax.grid(True, linestyle=':', alpha=0.5, linewidth=1.5)
     
-    # Stats Box: Tăng fontsize và padding
     stats_text = f"Rank-1: {pass_rate:.1f}%\nAvg Gap: {avg_gap:.3f}"
     # transform=ax.transAxes giúp cố định vị trí theo khung hình
     ax.text(0.04, 0.96, stats_text, transform=ax.transAxes, 
             verticalalignment='top', fontsize=16, fontweight='medium',
             bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.95, edgecolor='gray'))
     
-    # Legend: Di chuyển xuống góc dưới phải, chữ to
     ax.legend(loc='lower right', framealpha=0.95, fancybox=True)
 
 def main():
-    # Gọi hàm setup style đầu tiên
     set_publication_style()
 
     CONFIG_PATH = "/mnt/data/user_data/lampt/PS/code/outputs/2026-01-16/10-20-32/.hydra/config.yaml"
@@ -188,16 +174,14 @@ def main():
     print("\n>>> Processing Ours...")
     sp_ours, sn_ours = extract_test_scores(CONFIG_PATH, CKPT_OURS, enable_lora=True)
 
-    # Tăng kích thước ảnh tổng thể (Figure Size)
-    fig, axes = plt.subplots(1, 2, figsize=(16, 8)) # 16x8 inch để có không gian cho chữ to
+    fig, axes = plt.subplots(1, 2, figsize=(16, 8)) 
     
     plot_analysis(axes[0], sp_base, sn_base, "Baseline (mSigLIP)", target_margin=0.0)
     plot_analysis(axes[1], sp_ours, sn_ours, "Ours (LoRA + Circle)", target_margin=0.25)
     
     plt.tight_layout()
-    plt.savefig("distribution_final_v5_pub.png", dpi=300, bbox_inches='tight') # bbox_inches='tight' để không bị cắt chữ
+    plt.savefig("distribution_final_v5_pub.png", dpi=300, bbox_inches='tight') 
     print("Saved distribution_final_v5_pub.png")
-    # plt.show() # Comment lại nếu chạy trên server không có màn hình
 
 if __name__ == "__main__":
     main()

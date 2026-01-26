@@ -7,7 +7,6 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 
-# --- SETUP CƠ BẢN ---
 if not OmegaConf.has_resolver("tuple"):
     OmegaConf.register_new_resolver("tuple", lambda *args: tuple(args))
 if not OmegaConf.has_resolver("eval"):
@@ -26,7 +25,6 @@ from data.bases import ImageDataset, TextDataset
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 64
 
-# --- HÀM LOAD MODEL ---
 def normalize_key(k):
     garbage = ["model.", "backbone.", "base_model.", "image_encoder.", "text_encoder.", 
                "vision_model.", "text_model.", "encoder.", "module."]
@@ -98,7 +96,6 @@ def load_model_and_extract(config_path, ckpt_path, enable_lora):
     print("   Computing Ranking...")
     sims = torch.matmul(q_feats.to(DEVICE), gal_feats.to(DEVICE).t())
     
-    # Lấy Top-1 index
     top1_scores, top1_indices = torch.max(sims, dim=1)
     top1_indices = top1_indices.cpu()
     
@@ -122,8 +119,6 @@ def main():
         print("Fatal Error: PIDs do not match!")
         return
 
-    # TÌM CA LỘI NGƯỢC DÒNG CHÍNH XÁC
-    # Base sai (False) VÀ Ours đúng (True)
     flipped_indices = np.where((~correct_base) & (correct_ours))[0]
     
     flipped_pids = pids_base[flipped_indices]
@@ -132,10 +127,8 @@ def main():
     print(f"FOUND {len(flipped_pids)} REAL FLIPPED CASES (Base: Wrong -> Ours: Right)")
     print("="*60)
     
-    # Chọn ngẫu nhiên hoặc lấy 10 cái đầu
     print("Danh sách ID chính xác để vẽ (Copy vào TARGET_PIDS):")
-    print(list(flipped_pids[:10])) # In ra dạng list để copy cho tiện
-    
+    print(list(flipped_pids[:10])) 
     print("\nChi tiết 10 ca đầu tiên:")
     for pid in flipped_pids[:10]:
         print(f"- Model ID: {pid} (JSON ID: {pid+1})")
