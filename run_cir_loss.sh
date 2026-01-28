@@ -27,8 +27,8 @@ optimizer=cir_test
 optimizer.param_groups.default.lr=1e-4
 +optimizer._target_=torch.optim.AdamW
 
-backbone.freeze.vision=false
-backbone.freeze.text=false
+backbone.freeze.vision=true
+backbone.freeze.text=true
 
 
 loss.softlabel_ratio=0.0
