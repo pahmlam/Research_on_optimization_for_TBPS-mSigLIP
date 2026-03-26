@@ -13,7 +13,6 @@ defaults:
 training: true
 dataset_root_dir: .
 distributed: false
-img_size_str: "(256, 256)"
+img_size_str: "(384, 128)"
 img_size: ${eval:${img_size_str}}
 seed: 2307
-

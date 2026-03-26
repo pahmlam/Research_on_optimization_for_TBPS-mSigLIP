@@ -10,8 +10,18 @@ param_groups:
     start_lr: 1.0e-6      
     end_lr: 1.0e-5       
   
+  lora:
+    lr: ${optimizer.param_groups.default.lr}
+    weight_decay: 0.0
+    weight_decay_bias: 0.0
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    # scheduler
+    start_lr: ${eval:'${optimizer.param_groups.default.start_lr}'}
+    end_lr: ${eval:'${optimizer.param_groups.default.end_lr}'}
+
   backbone:
-    lr: ${optimizer.param_groups.default.lr} 
+    lr: ${optimizer.param_groups.default.lr}
     weight_decay: 0.01
     weight_decay_bias: 0.0
     betas: [0.9, 0.999]

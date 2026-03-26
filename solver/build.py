@@ -58,7 +58,8 @@ def build_optimizer(optimizer_cfg, model):
 
     # Create default group for remaining parameters
     default_params = [
-        param for param in model.parameters() if id(param) not in assigned_params
+        param for param in model.parameters()
+        if id(param) not in assigned_params and param.requires_grad
     ]
     if default_params:
         param_groups.append(

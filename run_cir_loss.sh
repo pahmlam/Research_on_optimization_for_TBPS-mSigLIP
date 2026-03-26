@@ -13,11 +13,11 @@ echo "========================================================"
 read -p "Insert your choice (1-6): " choice
 
 COMMON_ARGS="
-img_size_str='(256,256)'
+img_size_str='(384, 128)'
 dataset=vn3k_vi
 dataset.sampler=identity
 dataset.num_instance=4
-dataset.batch_size=24
+dataset.batch_size=64
 
 trainer.max_epochs=60
 trainer.accumulate_grad_batches=3
@@ -33,14 +33,7 @@ backbone.freeze.text=true
 
 loss.softlabel_ratio=0.0
 
-+lora._target_=peft.LoraConfig
-+lora.r=32
-+lora.lora_alpha=64
-+lora.lora_dropout=0.05
-+lora.bias=none
-+lora.inference_mode=false
-+lora.task_type=FEATURE_EXTRACTION
-+lora.target_modules=[\"q_proj\",\"v_proj\",\"k_proj\",\"out_proj\"]
+lora=default
 "
 
 case $choice in
