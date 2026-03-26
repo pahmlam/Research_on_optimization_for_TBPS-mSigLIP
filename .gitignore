@@ -1,0 +1,27 @@
+# ignore all __pycache__ directories regardless of position in the tree
+**/__pycache__
+VN3K
+CUHK-PEDES
+logs/
+tb_logs
+CUHK-PEDES
+clip_checkpoints
+siglip_checkpoints
+m_siglip_checkpoints
+.*
+!.gitignore
+notebooks
+*.ipynb
+outputs
+multirun
+experiments
+*.safetensors
+cuhk_test_original_clip
+cuhk_test_original_m_siglip
+lightning_logs
+
+*.ckpt
+*.pth
+*.pt
+*.safetensors
+*.csv
