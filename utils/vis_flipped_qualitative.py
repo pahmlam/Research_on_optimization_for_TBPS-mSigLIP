@@ -65,7 +65,7 @@ def load_model(config_path, ckpt_path, enable_lora):
     dm = TBPSDataModule(cfg)
     dm.setup(stage='test')
     
-    model = LitTBPS(cfg, dm.tokenizer.true_vocab_size, dm.tokenizer.pad_token_id, 1, 100, dm.num_classes)
+    model = LitTBPS(cfg, num_iters_per_epoch=1)
     if enable_lora: 
         model.setup_lora(cfg.lora)
         

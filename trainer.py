@@ -30,12 +30,6 @@ def run(config: DictConfig) -> None:
     # Set the seed
     seed_everything(config.seed)
 
-    # Modify the config if use MLM
-    if config.loss.MLM:
-        config.tokenizer.vocab_size += 1
-        config.tokenizer.add_mask_token = True
-        config.backbone.text_config.vocab_size = config.tokenizer.vocab_size
-
     # Load the data module
     dm = TBPSDataModule(config)
     dm.setup()
@@ -53,11 +47,7 @@ def run(config: DictConfig) -> None:
     # Preparing the model
     model = LitTBPS(
         config,
-        vocab_size=tokenizer.true_vocab_size,
-        pad_token_id=tokenizer.pad_token_id,
         num_iters_per_epoch=len(train_loader),
-        train_set_length=len(dm.train_set),
-        num_classes=dm.num_classes,
     )
     if config.get("lora", None):
         lora_config = config.lora
@@ -84,7 +74,6 @@ def run(config: DictConfig) -> None:
 
     trainer_args = config.trainer
     logger.info(f"Trainer Args: {trainer_args}")
-    logger.info(f"CE Loss ignored tokens: {dm.tokenizer.pad_token_id}")
     trainer = L.Trainer(
         callbacks=callbacks,
         logger=training_logger,

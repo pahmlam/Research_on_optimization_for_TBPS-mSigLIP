@@ -54,10 +54,7 @@ def extract_test_scores(config_path, ckpt_path, device='cuda', enable_lora=None)
         batch_size=64, shuffle=False, num_workers=4
     )
 
-    model = LitTBPS(
-        config, vocab_size=tokenizer.true_vocab_size, pad_token_id=tokenizer.pad_token_id,
-        num_iters_per_epoch=100, train_set_length=100, num_classes=dm.num_classes
-    )
+    model = LitTBPS(config, num_iters_per_epoch=100)
     if config.get("lora", None):
         print("Setting up LoRA...")
         model.setup_lora(config.lora)

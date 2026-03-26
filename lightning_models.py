@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 
 import lightning as L
 import torch
-import torch.nn.functional as F
 from loguru import logger
 from lightning.pytorch.utilities import grad_norm
 from prettytable import PrettyTable
@@ -13,7 +12,7 @@ from model.build import build_backbone_with_proper_layer_resize
 from model.lora import get_lora_model
 from model.tbps import TBPS
 from solver import build_lr_scheduler, build_optimizer
-from utils.metrics import rank, rank2
+from utils.metrics import rank
 
 
 class DataType(Enum):
@@ -82,33 +81,18 @@ class LitTBPS(L.LightningModule):
     def __init__(
         self,
         config,
-        vocab_size,
-        pad_token_id,
         num_iters_per_epoch,
-        train_set_length,
-        num_classes=11003,
     ):
         super().__init__()
 
         self.save_hyperparameters()
         self.config = config
-        # Initialize model components
+        self._initialize_state()
+
         try:
-            self._initialize_model(
-                vocab_size, pad_token_id, num_classes, num_iters_per_epoch
-            )
+            self._initialize_model(num_iters_per_epoch)
         except Exception as e:
             raise ModelException(f"Failed to initialize model: {str(e)}")
-
-        # Initialize state
-        self._initialize_state()
-        self.num_epoch_for_boosting = self.config.backbone.num_epoch_for_boosting
-        if self.num_epoch_for_boosting > 0:
-            logger.info(
-                f"Boosting weights will be calculated every {self.num_epoch_for_boosting} epochs"
-            )
-        self.weights = None
-        self.train_set_length = train_set_length
 
     ############# SETTING UP LORA ######################
     def setup_lora(self, lora_config: Dict) -> None:
@@ -118,9 +102,6 @@ class LitTBPS(L.LightningModule):
     ############# INITIALIZATION FUNCTIONS #############
     def _initialize_model(
         self,
-        vocab_size: int,
-        pad_token_id: int,
-        num_classes: int,
         num_iters_per_epoch: int,
     ) -> None:
         """Initialize model components and configuration"""
@@ -133,9 +114,6 @@ class LitTBPS(L.LightningModule):
         self.model = TBPS(
             config=self.config,
             backbone=self.backbone,
-            vocab_size=vocab_size,
-            pad_token_id=pad_token_id,
-            num_classes=num_classes,
         )
 
     def _initialize_state(self) -> None:
@@ -186,58 +164,27 @@ class LitTBPS(L.LightningModule):
 
     ############# TRAINING FUNCTIONS #############
     def training_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:
-        """
-        Training step implementation
-        """
+        """Training step implementation"""
         try:
-            # Compute alpha for soft labels
             epoch = self.trainer.current_epoch
-            alpha = self._compute_alpha(epoch)
-
-            # --- MODIFIED BLOCK START ---
-            # Truyền thêm current_epoch vào model để tính Curriculum Weight
-            ret = self.model(batch, alpha, self.weights, current_epoch=epoch)
-            # --- MODIFIED BLOCK END ---
+            ret = self.model(batch, current_epoch=epoch)
 
             loss = sum(v for k, v in ret.items() if k.endswith("loss"))
 
             # Log metrics
-            self._log_training_metrics(ret, alpha, loss, epoch, batch_idx)
-            
-            # Log thêm circle_weight nếu có để theo dõi curriculum
+            self.log_dict(ret, on_step=True, on_epoch=True, prog_bar=False)
+            self.log("total_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
             if "circle_loss_weight" in ret:
-                 self.log("cw", ret["circle_loss_weight"], on_step=True, on_epoch=True, prog_bar=True)
+                self.log("cw", ret["circle_loss_weight"], on_step=True, on_epoch=True, prog_bar=True)
+
+            if epoch == 0 and batch_idx == 0:
+                logger.info(f"Initial loss: {loss.item():.4f}")
 
             return loss
 
         except Exception as e:
             logger.error(f"Error in training step: {str(e)}")
             raise ModelException(f"Training step failed: {str(e)}")
-
-    def _compute_alpha(self, epoch: int) -> float:
-        """Compute alpha value for soft labels"""
-        alpha = self.config.loss.softlabel_ratio
-        if epoch == 0:
-            step = self.trainer.global_step
-            alpha *= min(1.0, step / self.num_iters_per_epoch)
-        return alpha
-
-    def _log_training_metrics(
-        self,
-        ret: Dict[str, torch.Tensor],
-        alpha: float,
-        loss: torch.Tensor,
-        epoch: int,
-        batch_idx: int,
-    ) -> None:
-        """Log training metrics"""
-        # Log individual losses
-        self.log_dict(ret, on_step=True, on_epoch=True, prog_bar=False)
-        self.log("alpha", alpha, on_step=True, on_epoch=True, prog_bar=False)
-        self.log("total_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
-
-        if epoch == 0 and batch_idx == 0:
-            logger.info(f"Initial loss: {loss.item():.4f}")
 
     def configure_optimizers(self):
         optimizer = build_optimizer(self.config.optimizer, self.model)
@@ -258,59 +205,6 @@ class LitTBPS(L.LightningModule):
         norms = grad_norm(self.model, norm_type=2)
         all_norms = norms[f"grad_{float(2)}_norm_total"]
         self.log("grad_norm", all_norms, on_step=True, on_epoch=True, prog_bar=True)
-
-    def on_train_epoch_end(self):
-        """End of training epoch"""
-        if (
-            self.num_epoch_for_boosting > 0
-            and self.trainer.current_epoch > 0
-            and self.trainer.current_epoch % self.num_epoch_for_boosting == 0
-        ):
-            self.calculate_boosting_weights()
-
-    def calculate_boosting_weights(self):
-        model = self.model.eval()
-        device = next(model.parameters()).device
-
-        qids, gids, qfeats, gfeats, ids = [], [], [], [], []
-        for batch in self.trainer.train_dataloader:
-            batch = {k: v.to(device) for k, v in batch.items()}
-            # images = batch['images'].to(device)
-            # caption_ids = batch['caption_ids'].to(device)
-            pid = batch["pids"]
-            batch_ids = batch["id"]
-            with torch.no_grad():
-                img_feat, text_feat = model.forward2(batch)
-            qids.append(pid.view(-1))
-            qfeats.append(text_feat)
-            gids.append(pid.view(-1))
-            gfeats.append(img_feat)
-            ids.append(batch_ids.view(-1))
-        qfeats = torch.cat(qfeats, 0)
-        gfeats = torch.cat(gfeats, 0)
-
-        # Concatenate all features
-        qfeats = F.normalize(qfeats, p=2, dim=1)  # text features
-        gfeats = F.normalize(gfeats, p=2, dim=1)  # image features
-        similarity = qfeats @ gfeats.t()
-        similarity = similarity.cpu()
-
-        qids = torch.cat(qids, 0).cpu()
-        gids = torch.cat(gids, 0).cpu()
-        ids = torch.cat(ids, 0).cpu()
-
-        _, _, c = rank2(similarity=similarity, q_pids=qids, g_pids=gids, max_rank=10)
-        change = ids[c == 1].tolist()
-
-        # Update weights
-        weights = torch.ones(self.train_set_length)
-        weights = weights.to(device)
-        weights.requires_grad = False
-        weights[change] = 1.6
-        logger.info(f"Boosting weights for ids {change}, set to 1.6")
-
-        # Cleanup
-        del qids, gids, qfeats, gfeats, similarity, ids, change
 
     ############# END TRAINING FUNCTIONS #############
 

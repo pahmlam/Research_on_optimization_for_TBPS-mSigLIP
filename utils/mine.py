@@ -39,14 +39,7 @@ def load_pretrained_backbone(config_path, pretrained_path):
     dm = TBPSDataModule(cfg)
     dm.setup()
     
-    model = LitTBPS(
-        config=cfg,
-        vocab_size=dm.tokenizer.vocab_size,
-        pad_token_id=dm.tokenizer.pad_token_id,
-        num_iters_per_epoch=1,
-        train_set_length=100,
-        num_classes=dm.num_classes,
-    )
+    model = LitTBPS(cfg, num_iters_per_epoch=1)
     
     # Load Safetensors & Map Keys (Quan trọng cho mSigLIP)
     sd = load_safetensors(pretrained_path)

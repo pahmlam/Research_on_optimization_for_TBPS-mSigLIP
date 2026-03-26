@@ -297,63 +297,16 @@ def compute_ritc(
 def compute_constrative(
     image_features,
     text_features,
-    image_features_stopped,
-    text_features_stopped,
     sim_targets,
-    alpha,
     logit_scale,
     logit_bias,
     use_sigmoid,
-    weights,
 ):
     """
-    Compute constrative loss for image-text pairs
-    with soft labeling mechanism
-
-    Args:
-        image_features: image features after pooling
-        text_features: text features after pooling
-        image_features_stopped: stopped gradients image features
-        text_features_stopped: stopped gradients text features
-        sim_targets: similarity targets for the image-text pairs
-        alpha: scaling factor for the similarity targets
-        logit_scale: scaling factor for the logits
-        logit_bias: bias for the logits if using sigmoid
-        use_sigmoid: use sigmoid or softmax for the similarity targets
+    Compute contrastive loss for image-text pairs.
     """
-    # Normalize the features
     image_features = F.normalize(image_features, dim=1, p=2)
     text_features = F.normalize(text_features, dim=1, p=2)
-    if image_features_stopped is not None:
-        image_features_stopped = F.normalize(image_features_stopped, dim=1, p=2)
-    if text_features_stopped is not None:
-        text_features_stopped = F.normalize(text_features_stopped, dim=1, p=2)
-
-    if alpha != 0:
-        with torch.no_grad():
-            logits_t2i_stopped = (
-                logit_scale * text_features_stopped @ image_features_stopped.t()
-                + logit_bias
-            )
-            logits_i2t_stopped = logits_t2i_stopped.t()
-
-            if use_sigmoid:
-                sim_targets = (
-                    alpha * F.sigmoid(logits_t2i_stopped) + (1 - alpha) * sim_targets
-                )
-            else:
-                sim_i2t_targets = (
-                    alpha * F.softmax(logits_i2t_stopped, dim=1)
-                    + (1 - alpha) * sim_targets
-                )
-                sim_t2i_targets = (
-                    alpha * F.softmax(logits_t2i_stopped, dim=1)
-                    + (1 - alpha) * sim_targets
-                )
-
-    else:
-        sim_i2t_targets = sim_targets
-        sim_t2i_targets = sim_targets
 
     logit_t2i = logit_scale * text_features @ image_features.t() + logit_bias
     logit_i2t = logit_scale * image_features @ text_features.t() + logit_bias
@@ -361,21 +314,11 @@ def compute_constrative(
     if use_sigmoid:
         loglik = F.logsigmoid(logit_t2i * sim_targets)
         nll = -torch.sum(loglik, dim=-1)
-        if weights is not None:
-            nll = weights * nll
         loss = nll.mean()
-
     else:
-        loss_i2t = -torch.sum(F.log_softmax(logit_i2t, dim=1) * sim_i2t_targets, dim=1)
-        loss_t2i = -torch.sum(F.log_softmax(logit_t2i, dim=1) * sim_t2i_targets, dim=1)
-
-        if weights is not None:
-            loss_i2t = weights * loss_i2t
-            loss_t2i = weights * loss_t2i
-
-        loss_i2t = loss_i2t.mean()
-        loss_t2i = loss_t2i.mean()
-        loss = (loss_i2t + loss_t2i) / 2
+        loss_i2t = -torch.sum(F.log_softmax(logit_i2t, dim=1) * sim_targets, dim=1)
+        loss_t2i = -torch.sum(F.log_softmax(logit_t2i, dim=1) * sim_targets, dim=1)
+        loss = (loss_i2t.mean() + loss_t2i.mean()) / 2
 
     return loss
 
