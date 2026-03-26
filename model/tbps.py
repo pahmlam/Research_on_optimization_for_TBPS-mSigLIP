@@ -434,10 +434,8 @@ class TBPS(nn.Module):
             ret.update({"nitc_loss": final_loss * self.config.loss.nitc_loss_weight})
         
         # --- E2. AUXILIARY CROSS-MODAL (Combined Static + Curriculum) ---
-        # Xử lý cho cả Mode 5 (Static) và Mode 6 (Curriculum)
         if strategy in ["auxiliary_cross", "auxiliary_cross_curriculum"]:
             
-            # 1. Luôn tính N-ITC (Loss nền tảng)
             if self.config.loss.get("NITC", None):
                 sim_targets = self.prepare_sim_targets(batch["pids"], self.use_sigmoid)
                 image_pooler_output_stopped = (
@@ -482,12 +480,11 @@ class TBPS(nn.Module):
 
                 ret.update({"nitc_loss": nitc_loss * self.config.loss.nitc_loss_weight})
 
-            # 2. Tính Circle Loss (Chỉ tính khi trọng số > 0 để tiết kiệm compute ở Warmup)
             if self.config.loss.get("CIR", None) and current_circle_weight > 0:
                 circle_m = self.config.loss.get("circle_margin", 0.25)
                 circle_gamma = self.config.loss.get("circle_gamma", 128)
                 
-                # Cross-Modal Circle Loss gốc
+                # Cross-Modal Circle Loss 
                 cm_circle_loss = objectives.compute_cross_modal_circle(
                     image_features=image_pooler_output,
                     text_features=caption_pooler_output,
@@ -498,9 +495,8 @@ class TBPS(nn.Module):
                 
                 final_circle_loss = cm_circle_loss
 
-                # MVS cho Circle Loss
+                # MVS for Circle Loss
                 if self.config.loss.get("MVS", None):
-                    # Check nếu aug_features chưa được tính ở block N-ITC
                     if 'aug_images_features' not in locals():
                         aug_images = batch["aug_images"]
                         aug_images_features = self.encode_image(aug_images)
@@ -514,10 +510,8 @@ class TBPS(nn.Module):
                     )
                     final_circle_loss = (cm_circle_loss + aug_cm_circle_loss) / 2
 
-                # Nhân với current_circle_weight (Đã xử lý logic động ở trên)
                 ret.update({"circle_loss": final_circle_loss * current_circle_weight})
             
-            # Nếu đang trong giai đoạn warmup (weight=0), có thể log loss = 0 để tiện theo dõi
             elif self.config.loss.get("CIR", None):
                  ret.update({"circle_loss": torch.tensor(0.0, device=image_pooler_output.device, requires_grad=True)})
 

@@ -1,261 +1,567 @@
-import os
-import sys
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
-import numpy as np
-from omegaconf import OmegaConf
-from tqdm import tqdm
-from torch.utils.data import DataLoader
-import textwrap
+from typing import Tuple
 
-# --- FIX: REGISTER RESOLVERS IMMEDIATELY ---
-if not OmegaConf.has_resolver("tuple"):
-    OmegaConf.register_new_resolver("tuple", lambda *args: tuple(args))
-
-if not OmegaConf.has_resolver("eval"):
-    OmegaConf.register_new_resolver("eval", eval)
-# -------------------------------------------
-
-# Import modules
-try:
-    from safetensors.torch import load_file as load_safetensors
-except ImportError:
-    print("Please install safetensors: pip install safetensors")
-    sys.exit(1)
-
-from lightning_models import LitTBPS
-from lightning_data import TBPSDataModule
-from data.bases import ImageDataset, TextDataset
-
-# --- CONFIGURATION ---
-TARGET_PIDS = [np.int64(2006), np.int64(2616)]
-
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH_SIZE = 64
-
-# --- MODEL LOADING FUNCTIONS ---
-def normalize_key(k):
-    garbage = ["model.", "backbone.", "base_model.", "image_encoder.", "text_encoder.", 
-               "vision_model.", "text_model.", "encoder.", "module."]
-    k_clean = k
-    for g in garbage: k_clean = k_clean.replace(g, "")
-    return k_clean
-
-def aggressive_load(model, state_dict):
-    model_state = model.state_dict()
-    new_sd = {}
-    ckpt_map = {normalize_key(k): k for k in state_dict.keys()}
-    
-    for model_k in model_state.keys():
-        clean = normalize_key(model_k)
-        if clean in ckpt_map:
-            ckpt_v = state_dict[ckpt_map[clean]]
-            if model_state[model_k].shape == ckpt_v.shape:
-                new_sd[model_k] = ckpt_v
-    model.load_state_dict(new_sd, strict=False)
-    return model
-
-def load_model(config_path, ckpt_path, enable_lora):
-    cfg = OmegaConf.load(config_path)
-    
-    if not enable_lora and "lora" in cfg: 
-        del cfg["lora"]
-    
-    # OmegaConf.resolve(cfg) <-- Đã xóa dòng gây lỗi này
-    
-    dm = TBPSDataModule(cfg)
-    dm.setup(stage='test')
-    
-    model = LitTBPS(cfg, dm.tokenizer.true_vocab_size, dm.tokenizer.pad_token_id, 1, 100, dm.num_classes)
-    if enable_lora: 
-        model.setup_lora(cfg.lora)
-        
-    print(f"   Loading weights from: {ckpt_path}")
-    ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
-    state_dict = {k.replace("_orig_mod.", ""): v for k, v in ckpt['state_dict'].items()}
-    aggressive_load(model, state_dict)
-    
-    model.to(DEVICE).eval()
-    return model, dm
-
-# --- IMAGE PROCESSING [ĐÃ SỬA: RESIZE VỀ KÍCH THƯỚC CHUẨN] ---
-def denormalize(tensor, target_size=(256, 128)):
+def compute_sdm(
+    image_fetures,
+    text_fetures,
+    pid,
+    logit_scale,
+    logit_bias,
+    image_id=None,
+    factor=0.3,
+    epsilon=1e-8,
+    weights=None,
+    use_sigmoid=False,
+):
     """
-    Chuyển tensor về ảnh numpy.
-    target_size=(Height, Width). Mặc định 256x128 cho ảnh người (Tỉ lệ 2:1)
+    Similarity Distribution Matching with Boosting techniques
     """
-    # 1. Resize (Upscale) dùng Bicubic để ảnh mượt hơn, không bị vỡ hạt
-    # Tensor input: (C, H, W) -> Cần unsqueeze thành (1, C, H, W) cho hàm interpolate
-    if target_size is not None:
-        tensor = F.interpolate(tensor.unsqueeze(0), size=target_size, mode='bicubic', align_corners=False).squeeze(0)
+    # Calculate similarity_targets
+    batch_size = image_fetures.shape[0]
+    pid = pid.reshape((batch_size, 1))  # make sure pid size is [batch_size, 1]
+    pid_dist = pid - pid.t()
+    labels = (pid_dist == 0).float()
 
-    # 2. De-normalize (ImageNet stats)
-    mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(tensor.device)
-    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(tensor.device)
-    
-    img = tensor * std + mean
-    img = img.clamp(0, 1)
-    
-    return img.permute(1, 2, 0).cpu().numpy()
+    if image_id is not None:
+        # print("Mix PID and ImageID to create soft label.")
+        image_id = image_id.reshape((-1, 1))
+        image_id_dist = image_id - image_id.t()
+        image_id_mask = (image_id_dist == 0).float()
+        labels = (labels - image_id_mask) * factor + image_id_mask
+        # labels = (labels + image_id_mask) / 2
 
-def get_rank_results(model, dm, target_pids):
-    # 1. Extract Gallery
-    gal_feats, gal_pids, gal_imgs = [], [], []
-    
-    loader = DataLoader(ImageDataset(dm.dataset.test, is_train=False, 
-                                     image_size=dm.config.aug.img.size, 
-                                     mean=dm.config.aug.img.mean, std=dm.config.aug.img.std),
-                        batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
-    
-    print("   Extracting Gallery...")
-    with torch.no_grad():
-        for batch in tqdm(loader):
-            imgs = batch['images'].to(DEVICE)
-            f = F.normalize(model.get_image_features(imgs), dim=1)
-            gal_feats.append(f.cpu())
-            gal_pids.append(batch['pids'])
-            gal_imgs.append(batch['images'].cpu())
-            
-    gal_feats = torch.cat(gal_feats)
-    gal_pids = torch.cat(gal_pids)
-    gal_imgs = torch.cat(gal_imgs)
+    # Normalize features
+    image_norm = image_fetures / image_fetures.norm(dim=1, keepdim=True)
+    text_norm = text_fetures / text_fetures.norm(dim=1, keepdim=True)
 
-    # 2. Extract Queries
-    results = {}
-    txt_loader = DataLoader(TextDataset(dm.dataset.test, tokenizer=dm.tokenizer),
-                            batch_size=BATCH_SIZE, shuffle=False)
-    
-    print("   Scanning Queries...")
-    with torch.no_grad():
-        for batch in txt_loader:
-            pids = batch['pids']
-            mask = torch.isin(pids, torch.tensor(target_pids, device=pids.device))
-            if not mask.any(): continue
-            
-            inputs = {}
-            for k, v in batch.items():
-                if k in ['input_ids', 'attention_mask', 'caption_input_ids', 'caption_attention_mask']:
-                    inputs[k] = v.to(DEVICE)
-            
-            if 'caption_input_ids' in inputs:
-                inputs['input_ids'] = inputs.pop('caption_input_ids')
-                inputs['attention_mask'] = inputs.pop('caption_attention_mask')
+    # Normalize the true matching distribution
+    labels_distribute = labels / labels.sum(dim=1)
 
-            all_feats = F.normalize(model.get_text_features(inputs), dim=1).cpu()
-            indices = torch.where(mask)[0]
-            for idx in indices:
-                pid = pids[idx].item()
-                if pid in results: continue 
-                
-                feat = all_feats[idx].unsqueeze(0)
-                sims = torch.matmul(feat, gal_feats.t()).squeeze()
-                topk_vals, topk_idx = torch.topk(sims, k=3)
-                
-                top_imgs = [gal_imgs[i] for i in topk_idx]
-                top_pids = [gal_pids[i].item() for i in topk_idx]
-                
-                if 'caption_input_ids' in batch: raw_ids = batch['caption_input_ids'][idx]
-                else: raw_ids = batch['input_ids'][idx]
-                    
-                caption = dm.tokenizer.decode(raw_ids, skip_special_tokens=True)
-                
-                results[pid] = {
-                    'caption': caption,
-                    'top_imgs': top_imgs,
-                    'top_pids': top_pids,
-                    'is_correct': [p == pid for p in top_pids]
-                }
-    return results
+    # Calculate the cosine similarity
+    t2i_cosine_theta = text_norm @ image_norm.t()
+    text_proj_image = logit_scale * t2i_cosine_theta + logit_bias
 
-# --- PLOTTING [ĐÃ SỬA: TĂNG CHIỀU CAO FIGURE] ---
-def plot_qualitative(base_res, ours_res, pids):
-    print("🎨 Drawing Flipped Cases...")
-    
-    rows = len(pids)
-    cols = 7 
-    
-    # [FIX] Tăng chiều cao của Figure lên (6 * rows thay vì 4 * rows)
-    # Vì ảnh người là ảnh dọc (cao), cần không gian dọc lớn hơn để không bị bóp méo
-    fig, axes = plt.subplots(rows, cols, figsize=(20, 6 * rows))
-    if rows == 1: axes = axes.reshape(1, -1)
-    
-    for r, pid in enumerate(pids):
-        if pid not in base_res or pid not in ours_res:
-            print(f"⚠️ PID {pid} missing. Skipping.")
-            continue
-            
-        b_data = base_res[pid]
-        o_data = ours_res[pid]
+    if use_sigmoid:
+        raise NotImplementedError(
+            "The sigmoid version of the loss is not implemented yet."
+        )
+        # logger.debug("Experimental feature")
+        # Calculate the score using sigmoid
+        t2i_pred = F.sigmoid(text_proj_image)
+        # Normalize the sigmoid probability to 0-1 range
+        t2i_pred = t2i_pred / (t2i_pred.sum(dim=1, keepdim=True))
+        # REMINDER: KL DIVERGENCE (y1 || y2) = y1 * (log(y1) - log(y2))
+        # Encourage the prediction to be sharper within a batch
+        t2i_loss = t2i_pred * (
+            torch.log(t2i_pred) - torch.log(labels_distribute + epsilon)
+        )
+        # Add additional weights to some ids inside the batch
+        if weights:
+            t2i_loss = weights * t2i_loss
+        loss = torch.mean(torch.sum(t2i_loss, dim=1))
+    else:
+        i2t_cosine_theta = t2i_cosine_theta.t()
+        image_proj_text = logit_scale * i2t_cosine_theta + logit_bias
+        i2t_pred = F.softmax(image_proj_text, dim=1)
+        i2t_loss = i2t_pred * (
+            F.log_softmax(image_proj_text, dim=1)
+            - torch.log(labels_distribute + epsilon)
+        )
+        t2i_pred = F.softmax(text_proj_image, dim=1)
+        t2i_loss = t2i_pred * (
+            F.log_softmax(text_proj_image, dim=1)
+            - torch.log(labels_distribute + epsilon)
+        )
+
+        if weights:
+            loss = torch.mean(weights * torch.sum(i2t_loss, dim=1)) + torch.mean(
+                weights * torch.sum(t2i_loss, dim=1)
+            )
+        else:
+            loss = torch.mean(torch.sum(i2t_loss, dim=1)) + torch.mean(
+                torch.sum(t2i_loss, dim=1)
+            )
+
+    return loss
+
+
+def compute_mlm(
+    scores,
+    labels,
+    ignore_index=1,
+):
+    """
+    Masked Language Model (MLM) loss
+
+    Args:
+        scores: output of the model
+        labels: ground truth labels
+        ignore_index: index to ignore in the loss computation
+    """
+    # ce = nn.CrossEntropyLoss(ignore_index=ignore_index)
+    # return ce(scores, labels)
+
+    loss = F.cross_entropy(scores, labels, ignore_index=ignore_index, reduction="mean")
+    return loss
+
+
+def compute_itc(
+    image_features,
+    text_features,
+    logit_scale,
+):
+    """
+    Image-text contrastive (ITC) loss, InfoNCE
+
+    Args:
+        image_features: image features after pooling
+        text_features: text features after pooling
+        logit_scale: scaling factor for the logits
+    """
+    # Normalize the features
+    image_features = F.normalize(image_features, dim=1, p=2)
+    text_features = F.normalize(text_features, dim=1, p=2)
+
+    batch_size = image_features.shape[0]
+    labels = torch.arange(
+        start=0, end=batch_size, dtype=torch.int64, device=image_features.device
+    )
+
+    # cosine similarity as logits
+    logits_per_image = logit_scale * image_features @ text_features.t()
+    logits_per_text = logits_per_image.t()
+
+    loss_i = F.cross_entropy(logits_per_image, labels, reduction="mean")
+    loss_t = F.cross_entropy(logits_per_text, labels, reduction="mean")
+    loss = (loss_i + loss_t) / 2
+
+    return loss
+
+
+def compute_id(
+    image_logits,
+    text_logits,
+    labels,
+    weights=None,
+):
+    """
+    Instance loss proposed at http://arxiv.org/abs/1711.05535
+    Args:
+        image_logits: image_features aften passing through a classifier
+        text_logits: text_features aften passing through a classifier
+        labels: ground truth labels for the classification task
+    """
+    criterion = nn.CrossEntropyLoss(reduction="none")
+    loss1 = criterion(image_logits, labels)
+    loss2 = criterion(text_logits, labels)
+    if weights:
+        loss1 = weights * loss1
+        loss2 = weights * loss2
+    loss = (torch.mean(loss1) + torch.mean(loss2)) / 2
+    return loss
+
+
+def compute_cmpm(image_embeddings, text_embeddings, labels, epsilon=1e-8):
+    """
+    Cross-Modal Projection Matching Loss(CMPM)
+    :param image_embeddings: Tensor with dtype torch.float32
+    :param text_embeddings: Tensor with dtype torch.float32
+    :param labels: Tensor with dtype torch.int32
+    :return:
+        i2t_loss: cmpm loss for image projected to text
+        t2i_loss: cmpm loss for text projected to image
+        pos_avg_sim: average cosine-similarity for positive pairs
+        neg_avg_sim: averate cosine-similarity for negative pairs
+    """
+
+    batch_size = image_embeddings.shape[0]
+    labels_reshape = torch.reshape(labels, (batch_size, 1))
+    labels_dist = labels_reshape - labels_reshape.t()
+    labels_mask = (labels_dist == 0).float()
+
+    image_proj_text = torch.matmul(image_embeddings, image_embeddings.t())
+    text_proj_image = torch.matmul(text_embeddings, image_embeddings.t())
+
+    # normalize the true matching distribution
+    labels_mask_norm = labels_mask / labels_mask.norm(dim=1)
+
+    i2t_pred = F.softmax(image_proj_text, dim=1)
+    i2t_loss = i2t_pred * (
+        F.log_softmax(image_proj_text, dim=1) - torch.log(labels_mask_norm + epsilon)
+    )
+    t2i_pred = F.softmax(text_proj_image, dim=1)
+    t2i_loss = t2i_pred * (
+        F.log_softmax(text_proj_image, dim=1) - torch.log(labels_mask_norm + epsilon)
+    )
+
+    cmpm_loss = torch.mean(torch.sum(i2t_loss, dim=1)) + torch.mean(
+        torch.sum(t2i_loss, dim=1)
+    )
+
+    return cmpm_loss
+
+
+def compute_citc(
+    image_features,
+    text_features,
+    logit_scale,
+    logit_bias,
+    inmodal_weight,
+    intermodal_weight,
+):
+    """
+    Compute cyclic image-text contrastive loss
+
+    Args:
+        image_features: image features after pooling
+        text_features: text features after pooling
+        logit_scale: scaling factor for the logits
+        logit_bias: bias for the logits if using sigmoid
+        inmodal_weight: scaling factor for the cyclic loss
+        intermodal_weight: scaling factor for the cyclic loss
+    """
+    # Normalize the features
+    image_features = F.normalize(image_features, dim=1, p=2)
+    text_features = F.normalize(text_features, dim=1, p=2)
+
+    sim_i2i = logit_scale * image_features @ image_features.t() + logit_bias
+    sim_t2t = logit_scale * text_features @ text_features.t() + logit_bias
+
+    sim_i2t = logit_scale * image_features @ text_features.t() + logit_bias
+    sim_t2i = sim_i2t.t()
+
+    inmodal_cyclic_loss = (sim_i2i - sim_t2t).square().mean() / (
+        logit_scale * logit_scale
+    )
+    intermodal_cyclic_loss = (sim_i2t - sim_t2i).square().mean() / (
+        logit_scale * logit_scale
+    )
+
+    loss = (
+        inmodal_weight * inmodal_cyclic_loss
+        + intermodal_weight * intermodal_cyclic_loss
+    )
+    return loss
+
+
+def compute_ritc(
+    image_features,
+    text_features,
+    logit_scale,
+    logit_bias,
+    sim_targets,
+    use_sigmoid,
+    eps=1e-2,
+):
+    """
+    Compute the reverse image-text contrastive loss
+
+    Args:
+        image_features: image features after pooling
+        text_features: text features after pooling
+        logit_scale: scaling factor for the logits
+    """
+    # Normalize the features
+    image_features = F.normalize(image_features, dim=1, p=2)
+    text_features = F.normalize(text_features, dim=1, p=2)
+
+    sim_i2t = logit_scale * image_features @ text_features.t() + logit_bias
+    sim_t2i = sim_i2t.t()
+
+    if use_sigmoid:
+        raise NotImplementedError(
+            "The sigmoid version of the loss is not implemented yet."
+        )
+        sim_targets = (sim_targets + 1) / 2
+        sim_targets = sim_targets / (sim_targets.sum(dim=1, keepdim=True))
+        target_prob = (sim_targets + eps).log()
+        prob = F.sigmoid(sim_i2t)
+        # normalize the probability
+        prob = prob / (prob.sum(dim=1, keepdim=True) + eps)
+        loss = F.kl_div(target_prob, prob, log_target=True, reduction="batchmean")
+
+    else:
+        target_prob = (sim_targets + 1e-2).log()
+        prob_i2t = F.log_softmax(sim_i2t, dim=1)
+        prob_t2i = F.log_softmax(sim_t2i, dim=1)
+
+        kl_img = F.kl_div(target_prob, prob_i2t, log_target=True, reduction="batchmean")
+        kl_txt = F.kl_div(target_prob, prob_t2i, log_target=True, reduction="batchmean")
+        loss = (kl_img + kl_txt) / 2
+
+    return loss
+
+
+def compute_constrative(
+    image_features,
+    text_features,
+    image_features_stopped,
+    text_features_stopped,
+    sim_targets,
+    alpha,
+    logit_scale,
+    logit_bias,
+    use_sigmoid,
+    weights,
+):
+    """
+    Compute constrative loss for image-text pairs
+    with soft labeling mechanism
+
+    Args:
+        image_features: image features after pooling
+        text_features: text features after pooling
+        image_features_stopped: stopped gradients image features
+        text_features_stopped: stopped gradients text features
+        sim_targets: similarity targets for the image-text pairs
+        alpha: scaling factor for the similarity targets
+        logit_scale: scaling factor for the logits
+        logit_bias: bias for the logits if using sigmoid
+        use_sigmoid: use sigmoid or softmax for the similarity targets
+    """
+    # Normalize the features
+    image_features = F.normalize(image_features, dim=1, p=2)
+    text_features = F.normalize(text_features, dim=1, p=2)
+    if image_features_stopped is not None:
+        image_features_stopped = F.normalize(image_features_stopped, dim=1, p=2)
+    if text_features_stopped is not None:
+        text_features_stopped = F.normalize(text_features_stopped, dim=1, p=2)
+
+    if alpha != 0:
+        with torch.no_grad():
+            logits_t2i_stopped = (
+                logit_scale * text_features_stopped @ image_features_stopped.t()
+                + logit_bias
+            )
+            logits_i2t_stopped = logits_t2i_stopped.t()
+
+            if use_sigmoid:
+                sim_targets = (
+                    alpha * F.sigmoid(logits_t2i_stopped) + (1 - alpha) * sim_targets
+                )
+            else:
+                sim_i2t_targets = (
+                    alpha * F.softmax(logits_i2t_stopped, dim=1)
+                    + (1 - alpha) * sim_targets
+                )
+                sim_t2i_targets = (
+                    alpha * F.softmax(logits_t2i_stopped, dim=1)
+                    + (1 - alpha) * sim_targets
+                )
+
+    else:
+        sim_i2t_targets = sim_targets
+        sim_t2i_targets = sim_targets
+
+    logit_t2i = logit_scale * text_features @ image_features.t() + logit_bias
+    logit_i2t = logit_scale * image_features @ text_features.t() + logit_bias
+
+    if use_sigmoid:
+        loglik = F.logsigmoid(logit_t2i * sim_targets)
+        nll = -torch.sum(loglik, dim=-1)
+        if weights is not None:
+            nll = weights * nll
+        loss = nll.mean()
+
+    else:
+        loss_i2t = -torch.sum(F.log_softmax(logit_i2t, dim=1) * sim_i2t_targets, dim=1)
+        loss_t2i = -torch.sum(F.log_softmax(logit_t2i, dim=1) * sim_t2i_targets, dim=1)
+
+        if weights is not None:
+            loss_i2t = weights * loss_i2t
+            loss_t2i = weights * loss_t2i
+
+        loss_i2t = loss_i2t.mean()
+        loss_t2i = loss_t2i.mean()
+        loss = (loss_i2t + loss_t2i) / 2
+
+    return loss
+
+
+def compute_simclr(
+    image_features_1,
+    image_features_2,
+    temperature=0.07,
+):
+    """
+    Contrastive learning loss using SimCLR
+
+    Args:
+        image_features_1: image features after augmentation 1
+        image_features_2: image features after augmentation 2
+        temperature: temperature for the softmax
+    """
+    device = image_features_1.device
+    batch_size = image_features_1.shape[0]
+
+    image_features_1 = F.normalize(image_features_1, dim=-1, p=2)
+    image_features_2 = F.normalize(image_features_2, dim=-1, p=2)
+
+    # Create labels for the batch
+    labels = torch.arange(start=0, end=batch_size, device=device)
+
+    # Similarity between the first augmented image and the second augmented image
+    sim_ab = (image_features_1 @ image_features_2.t()) / temperature
+    sim_ba = sim_ab.t()
+
+    mask = torch.where(F.one_hot(labels, batch_size) == 0, 0, float("-inf"))
+    # Similarity between the first augmented image and other augmented images in the batch
+    sim_aa = (image_features_1 @ image_features_1.t()) / temperature + mask
+    sim_bb = (image_features_2 @ image_features_2.t()) / temperature + mask
+
+    # Similarity between all images of the 1st augmented images with all other images
+    sim_a = torch.cat((sim_ab, sim_aa), dim=1)
+    # Similarity between all images of the 2nd augmented images with all other images
+    sim_b = torch.cat((sim_ba, sim_bb), dim=1)
+
+    loss_a = F.cross_entropy(sim_a, labels)
+    loss_b = F.cross_entropy(sim_b, labels)
+
+    loss = (loss_a + loss_b) / 2
+
+    return loss
+
+# --- NEW PAIRWISE CIRCLE LOSS ---
+
+class CircleLoss(nn.Module):
+    """
+    Circle Loss implementation (Optimized Global Pairwise version).
+    Reference: https://arxiv.org/abs/2002.10857
+    """
+    def __init__(self, m: float, gamma: float):
+        super(CircleLoss, self).__init__()
+        self.m = m
+        self.gamma = gamma
+        self.soft_plus = nn.Softplus()
+
+    def forward(self, features: torch.Tensor, pids: torch.Tensor):
+        features = F.normalize(features, p=2, dim=1)
         
-        # 1. Text Query
-        ax_txt = axes[r, 0]
-        real_pid = pid + 1 
-        wrapped_text = "\n".join(textwrap.wrap(f"ID: {real_pid}\n{b_data['caption']}", width=25))
-        ax_txt.text(0.5, 0.5, wrapped_text, ha='center', va='center', fontsize=14, family='serif')
-        ax_txt.axis('off')
+        # Calculate Cosine Similarity Matrix
+        sim_mat = torch.matmul(features, features.t())
+
+        # Masks
+        pids = pids.view(-1, 1)
+
+        pos_mask = torch.eq(pids, pids.t()).float()
+        pos_mask.fill_diagonal_(0) 
         
-        # 2. Baseline Images
-        for i in range(3):
-            ax = axes[r, 1+i]
-            # [FIX] Gọi hàm denormalize mới (mặc định resize về 256x128)
-            img = denormalize(b_data['top_imgs'][i], target_size=(256, 128))
-            
-            # [FIX] aspect='auto' giúp ảnh điền đầy khung mà vẫn giữ tỉ lệ nếu khung hình hợp lý
-            ax.imshow(img, interpolation='bicubic') 
-            
-            is_correct = b_data['is_correct'][i]
-            color = 'green' if is_correct else 'red'
-            width = 4 if is_correct else 2
-            
-            for spine in ax.spines.values():
-                spine.set_edgecolor(color)
-                spine.set_linewidth(width)
-                
-            ax.set_xticks([]); ax.set_yticks([])
-            if r == 0 and i == 1: 
-                ax.set_title("Baseline (mSigLIP)\nFails to Retrieve", fontsize=16, fontweight='bold', pad=15, family='serif')
-            
-            ax.text(5, 25, f"Rank-{i+1}", color='white', fontweight='bold', fontsize=12,
-                    bbox=dict(facecolor=color, alpha=0.8, pad=2, edgecolor='none'))
+        neg_mask = 1 - pos_mask
+        neg_mask.fill_diagonal_(0) 
 
-        # 3. Ours Images
-        for i in range(3):
-            ax = axes[r, 4+i]
-            img = denormalize(o_data['top_imgs'][i], target_size=(256, 128))
-            ax.imshow(img, interpolation='bicubic')
-            
-            is_correct = o_data['is_correct'][i]
-            color = 'green' if is_correct else 'red'
-            width = 4 if is_correct else 2
-            
-            for spine in ax.spines.values():
-                spine.set_edgecolor(color)
-                spine.set_linewidth(width)
-                
-            ax.set_xticks([]); ax.set_yticks([])
-            if r == 0 and i == 1: 
-                ax.set_title("Ours (LoRA + Circle)\nCorrectly Retrieves", fontsize=16, fontweight='bold', pad=15, family='serif')
-            
-            ax.text(5, 25, f"Rank-{i+1}", color='white', fontweight='bold', fontsize=12,
-                    bbox=dict(facecolor=color, alpha=0.8, pad=2, edgecolor='none'))
+        s_p = sim_mat[pos_mask.bool()]
+        s_n = sim_mat[neg_mask.bool()]
 
-    plt.tight_layout()
-    plt.savefig("flipped_cases_visualization.png", dpi=300, bbox_inches='tight')
-    print("✅ Saved to flipped_cases_visualization.png")
+        if s_p.numel() == 0 or s_n.numel() == 0:
+            return torch.tensor(0.0, device=features.device, requires_grad=True)
 
-if __name__ == "__main__":
-    CONFIG_PATH = "/mnt/data/user_data/lampt/PS/code/outputs/2026-01-16/10-20-32/.hydra/config.yaml"
-    CKPT_BASELINE = "/mnt/data/user_data/lampt/PS/code/epoch=56-val_score=49.15.ckpt" 
-    CKPT_OURS = "/mnt/data/user_data/lampt/PS/code/checkpoints/vn3k-curri/epoch=53-val_score=51.30.ckpt"
+        alpha_p = torch.clamp_min(-s_p.detach() + 1 + self.m, min=0.)
+        alpha_n = torch.clamp_min(s_n.detach() + self.m, min=0.)
 
-    print(">>> Processing Baseline...")
-    m_base, dm = load_model(CONFIG_PATH, CKPT_BASELINE, enable_lora=False)
-    res_base = get_rank_results(m_base, dm, TARGET_PIDS)
-    del m_base; torch.cuda.empty_cache()
+        delta_p = 1 - self.m
+        delta_n = self.m
 
-    print("\n>>> Processing Ours...")
-    m_ours, _ = load_model(CONFIG_PATH, CKPT_OURS, enable_lora=True)
-    res_ours = get_rank_results(m_ours, dm, TARGET_PIDS)
+        logit_p = - self.gamma * alpha_p * (s_p - delta_p)
+        logit_n = self.gamma * alpha_n * (s_n - delta_n)
+
+        loss = self.soft_plus(
+            torch.logsumexp(logit_p, dim=0) + 
+            torch.logsumexp(logit_n, dim=0)
+        )
+
+        return loss
+
+def compute_cir(features, labels, m=0.25, gamma=64):
+    """
+    Wrapper function for Pairwise Circle Loss.
+    """
+    criterion = CircleLoss(m=m, gamma=gamma)
+    loss = criterion(features, labels)
+    return loss
+
+def compute_intrinsic_nitc(
+    image_features,
+    text_features,
+    logit_scale, 
+    logit_bias,
+    pids,
+    m=0.35,
+    gamma=80
+):
+    """
+    N-ITC with Intrinsic Circle Loss integration (Sigmoid-Circle).
+    Explicitly optimizes both I2T and T2I directions.
+    """
+    image_features = F.normalize(image_features, dim=1, p=2)
+    text_features = F.normalize(text_features, dim=1, p=2)
+
+    sim_i2t = image_features @ text_features.t()
+    sim_t2i = sim_i2t.t() 
+
+    pids = pids.view(-1, 1)
     
-    plot_qualitative(res_base, res_ours, TARGET_PIDS)
+    pos_mask = torch.eq(pids, pids.t()).float()
+    neg_mask = 1 - pos_mask
+
+    def apply_circle_dynamics(sim_matrix):
+        sim_detached = sim_matrix.detach()
+        
+        alpha_p = torch.clamp_min(-sim_detached + 1 + m, min=0.)
+        
+        alpha_n = torch.clamp_min(sim_detached + m, min=0.)
+        
+        delta_p = 1 - m
+        delta_n = m
+        
+        logit_p = gamma * alpha_p * (sim_matrix - delta_p)
+        logit_n = gamma * alpha_n * (sim_matrix - delta_n)
+
+        return logit_p * pos_mask + logit_n * neg_mask
+
+    mod_logits_i2t = apply_circle_dynamics(sim_i2t)
+    mod_logits_t2i = apply_circle_dynamics(sim_t2i)
+
+    loss_i2t = F.binary_cross_entropy_with_logits(mod_logits_i2t, pos_mask)
+    loss_t2i = F.binary_cross_entropy_with_logits(mod_logits_t2i, pos_mask)
+    
+    return (loss_i2t + loss_t2i) / 2
+
+
+def compute_cross_modal_circle(image_features, text_features, pids, m=0.25, gamma=128):
+    """
+     Circle Loss between 2 modalities
+    """
+    image_features = F.normalize(image_features, dim=1, p=2)
+    text_features = F.normalize(text_features, dim=1, p=2)
+
+    sim_mat = torch.matmul(image_features, text_features.t())
+
+    pids = pids.view(-1, 1)
+
+    pos_mask = torch.eq(pids, pids.t()).float()
+    neg_mask = 1 - pos_mask
+
+    s_p = sim_mat[pos_mask.bool()]
+    s_n = sim_mat[neg_mask.bool()]
+
+    if s_p.numel() == 0 or s_n.numel() == 0:
+        return torch.tensor(0.0, device=image_features.device, requires_grad=True)
+
+    alpha_p = torch.clamp_min(-s_p.detach() + 1 + m, min=0.)
+    alpha_n = torch.clamp_min(s_n.detach() + m, min=0.)
+
+    delta_p = 1 - m
+    delta_n = m
+
+    logit_p = - gamma * alpha_p * (s_p - delta_p)
+    logit_n = gamma * alpha_n * (s_n - delta_n)
+
+    soft_plus = torch.nn.Softplus()
+    loss = soft_plus(
+        torch.logsumexp(logit_p, dim=0) + 
+        torch.logsumexp(logit_n, dim=0)
+    )
+
+    return loss

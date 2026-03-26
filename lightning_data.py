@@ -263,3 +263,33 @@ class TBPSDataModule(pl.LightningDataModule):
         }
         combined_loader = CombinedLoader(combined_test, mode="sequential")
         return combined_loader
+    def tsne_dataloader(self):
+        """
+        Deterministic dataloader for visualization (t-SNE).
+        - No RandomIdentitySampler
+        - No CombinedLoader
+        - Same ordering every run
+        """
+        dataset = ImageTextDataset(
+            dataset=self.dataset.test,
+            tokenizer=self.tokenizer,
+            ss_aug=None,
+            image_augmentation_pool=None,
+            text_augmentation_pool=None,
+            image_random_k=1,
+            text_random_k=1,
+            truncate=True,
+            image_size=self.config.aug.img.size,
+            is_train=False,
+            mean=self.mean,
+            std=self.std,
+        )
+
+        return DataLoader(
+            dataset,
+            batch_size=self.config.dataset.test_batch_size,
+            shuffle=False,          # 🔴 QUAN TRỌNG
+            num_workers=self.config.dataset.num_workers,
+            drop_last=False,
+        )
+

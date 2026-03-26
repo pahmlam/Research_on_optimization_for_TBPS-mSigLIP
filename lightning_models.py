@@ -16,6 +16,67 @@ from solver import build_lr_scheduler, build_optimizer
 from utils.metrics import rank, rank2
 
 
+class G2HNA_Hook:
+    """
+    Sniper G2HNA (Top-K Hard Mining).
+    Thay vì khuếch đại mềm (Soft), ta chọn lọc Top-K% phần tử có gradient lớn nhất 
+    và ép chúng học cực mạnh.
+    """
+    def __init__(self, amplification_factor=2.0, top_k_ratio=0.05, warmup_epochs=5, debug=False):
+        """
+        amplification_factor: Nhân hệ số lớn (ví dụ 2.0 hoặc 3.0) vì ta chỉ áp dụng cho nhóm nhỏ.
+        top_k_ratio: Tỉ lệ phần trăm gradient được coi là "Hard" (0.05 = Top 5%).
+        """
+        self.lamb = amplification_factor
+        self.ratio = top_k_ratio
+        self.warmup_epochs = warmup_epochs
+        self.debug = debug
+        self.current_epoch = 0
+        self.step_count = 0
+
+    def set_epoch(self, epoch):
+        self.current_epoch = epoch
+
+    def scale_gradient(self, grad):
+        if grad is None: return None
+
+        # 1. Ngủ đông Warmup
+        if self.current_epoch <= self.warmup_epochs:
+            return grad 
+
+        # 2. Sniper Mode: Tìm Top-K% phần tử lớn nhất
+        grad_abs = torch.abs(grad)
+        num_params = grad.numel()
+        k = int(num_params * self.ratio)
+        
+        # Nếu layer quá nhỏ, lấy ít nhất 1
+        k = max(1, k)
+        
+        # Tìm giá trị ngưỡng (threshold) của Top-K
+        # Dùng kthvalue nhanh hơn sort toàn bộ
+        # view(-1) để làm phẳng tensor
+        flatten_grad = grad_abs.view(-1)
+        top_val, _ = torch.kthvalue(flatten_grad, num_params - k + 1)
+        threshold = top_val.item()
+        
+        # 3. Tạo Mask: Chỉ những vị trí > threshold mới được nhân
+        # mask = 1 ở vị trí Hard, 0 ở vị trí Easy
+        mask = (grad_abs >= threshold).float()
+        
+        # --- DEBUG LOG ---
+        if self.debug and self.step_count % 500 == 0:
+            # Tính xem Top-K lớn cỡ nào so với trung bình
+            avg_grad = grad_abs.mean().item()
+            top_grad_avg = (grad_abs * mask).sum() / (mask.sum() + 1e-9)
+            print(f"🎯 [SNIPER G2HNA | Ep {self.current_epoch}] MeanAll={avg_grad:.1e} | MeanTop{int(self.ratio*100)}%={top_grad_avg.item():.1e} | Boost={self.lamb}x")
+        self.step_count += 1
+        # -----------------
+
+        # 4. Áp dụng:
+        # Gradient mới = Gradient cũ + (Gradient cũ * Mask * Lambda)
+        # Tức là: Những thằng Hard sẽ được nhân (1 + Lambda). Những thằng Easy nhân 1.
+        return grad + (grad * mask * self.lamb)
+    
 class DataType(Enum):
     """Enum for different types of data processing"""
 
@@ -112,9 +173,33 @@ class LitTBPS(L.LightningModule):
 
     ############# SETTING UP LORA ######################
     def setup_lora(self, lora_config: Dict) -> None:
-        """Setup LORA for the model"""
         self.backbone = get_lora_model(self.backbone, lora_config)
         self.backbone.print_trainable_parameters()
+        
+        # CẤU HÌNH G2HNA HẸN GIỜ
+        self.g2hna_hook = G2HNA_Hook(
+            amplification_factor=3.0,  # Phạt cực nặng (Nhân 4 lần: 1 + 3)
+            top_k_ratio=0.02,          # Chỉ đánh vào Top 1% (những thằng cứng đầu nhất)
+            warmup_epochs=5,
+            debug=True
+        )
+        
+        for name, param in self.backbone.named_parameters():
+            if 'lora' in name and param.requires_grad:
+                param.register_hook(self.g2hna_hook.scale_gradient)
+        
+        logger.info(f"💤 G2HNA Initialized in SLEEP MODE. Will wake up after epoch {self.g2hna_hook.warmup_epochs}.")
+
+    # BẮT BUỘC PHẢI CÓ HÀM NÀY ĐỂ CẬP NHẬT EPOCH
+    def on_train_epoch_start(self):
+        super().on_train_epoch_start() # Gọi parent nếu cần
+        if hasattr(self, 'g2hna_hook'):
+            # Cập nhật epoch hiện tại cho Hook
+            self.g2hna_hook.set_epoch(self.trainer.current_epoch)
+            
+            # Log thông báo khi G2HNA thức giấc
+            if self.trainer.current_epoch == self.g2hna_hook.warmup_epochs + 1:
+                logger.info("🚀 G2HNA IS NOW ACTIVATED! Hunting hard negatives...")
 
     ############# INITIALIZATION FUNCTIONS #############
     def _initialize_model(
@@ -189,24 +274,25 @@ class LitTBPS(L.LightningModule):
     def training_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:
         """
         Training step implementation
-
-        Args:
-            batch: Input batch dictionary
-            batch_idx: Batch index
-
-        Returns:
-            Loss tensor
         """
         try:
             # Compute alpha for soft labels
             epoch = self.trainer.current_epoch
             alpha = self._compute_alpha(epoch)
 
-            ret = self.model(batch, alpha, self.weights)
+            # --- MODIFIED BLOCK START ---
+            # Truyền thêm current_epoch vào model để tính Curriculum Weight
+            ret = self.model(batch, alpha, self.weights, current_epoch=epoch)
+            # --- MODIFIED BLOCK END ---
+
             loss = sum(v for k, v in ret.items() if k.endswith("loss"))
 
             # Log metrics
             self._log_training_metrics(ret, alpha, loss, epoch, batch_idx)
+            
+            # Log thêm circle_weight nếu có để theo dõi curriculum
+            if "circle_loss_weight" in ret:
+                 self.log("cw", ret["circle_loss_weight"], on_step=True, on_epoch=True, prog_bar=True)
 
             return loss
 

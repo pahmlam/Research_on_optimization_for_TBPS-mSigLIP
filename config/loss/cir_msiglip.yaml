@@ -10,10 +10,10 @@ softlabel_ratio: 0.0
 MVS: true   
 
 CIR: true   
-circle_loss_weight: 0.5 
+circle_loss_weight: 0.1
 
-circle_margin: 0.25    
-circle_gamma: 64  
+circle_margin: 0.35    
+circle_gamma: 128
 
 CITC: true  
 citc_inmodal_weight: 0.25
