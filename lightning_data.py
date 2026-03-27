@@ -10,7 +10,6 @@ from data.augmentation.transform import build_image_aug_pool, build_text_aug_poo
 from data.bases import (
     ImageDataset,
     ImageTextDataset,
-    ImageTextMLMDataset,
     TextDataset,
 )
 from data.cuhkpedes import CUHKPEDES
@@ -103,36 +102,20 @@ class TBPSDataModule(pl.LightningDataModule):
             )
 
         if stage == "fit" or stage is None:
-            if self.config.loss.MLM:
-                self.train_set = ImageTextMLMDataset(
-                    dataset=self.dataset.train,
-                    tokenizer=self.tokenizer,
-                    ss_aug=self.ss_aug,
-                    image_augmentation_pool=self.image_aug_pool,
-                    text_augmentation_pool=self.text_aug_pool,
-                    image_random_k=self.image_random_k,
-                    text_random_k=self.text_random_k,
-                    truncate=True,
-                    image_size=self.config.aug.img.size,
-                    is_train=True,
-                    mean=self.mean,
-                    std=self.std,
-                )
-            else:
-                self.train_set = ImageTextDataset(
-                    dataset=self.dataset.train,
-                    tokenizer=self.tokenizer,
-                    ss_aug=self.ss_aug,
-                    image_augmentation_pool=self.image_aug_pool,
-                    text_augmentation_pool=self.text_aug_pool,
-                    image_random_k=self.image_random_k,
-                    text_random_k=self.text_random_k,
-                    truncate=True,
-                    image_size=self.config.aug.img.size,
-                    is_train=True,
-                    mean=self.mean,
-                    std=self.std,
-                )
+            self.train_set = ImageTextDataset(
+                dataset=self.dataset.train,
+                tokenizer=self.tokenizer,
+                ss_aug=self.ss_aug,
+                image_augmentation_pool=self.image_aug_pool,
+                text_augmentation_pool=self.text_aug_pool,
+                image_random_k=self.image_random_k,
+                text_random_k=self.text_random_k,
+                truncate=True,
+                image_size=self.config.aug.img.size,
+                is_train=True,
+                mean=self.mean,
+                std=self.std,
+            )
 
             logger.info("Validation set is available")
 
