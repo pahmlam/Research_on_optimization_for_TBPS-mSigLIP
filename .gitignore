@@ -8,7 +8,6 @@ CUHK-PEDES
 clip_checkpoints
 siglip_checkpoints
 m_siglip_checkpoints
-.*
 !.gitignore
 notebooks
 *.ipynb
