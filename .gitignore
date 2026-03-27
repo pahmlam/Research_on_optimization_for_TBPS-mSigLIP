@@ -27,3 +27,4 @@ lightning_logs
 
 checkpoints/
 datasets/
+run_cir_loss.sh

@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - dataset: cuhk_pedes
+  - dataset: vn3k_vi
   - loss: cir_msiglip
   - aug: siglip
   - trainer: best_msiglip
