@@ -17,7 +17,7 @@ class VN3K_VI(BaseDataset):
         self.dataset_dir = op.join(root, self.dataset_dir)
         self.img_dir = op.join(self.dataset_dir, "imgs/")
 
-        self.anno_path = op.join(self.dataset_dir, "data_captions.json")
+        self.anno_path = op.join(self.dataset_dir, "data_captions_vn3k.json")
         self._check_before_run()
 
         self.train_annos, self.test_annos, self.val_annos = self._split_anno(
