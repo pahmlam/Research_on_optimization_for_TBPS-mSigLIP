@@ -5,7 +5,7 @@ MVS: true
 
 CIR: true
 circle_loss_weight: 0.1
-circle_margin: 0.35
+circle_margin: 0.25
 circle_gamma: 128
 
 CITC: true

@@ -1,7 +1,7 @@
 # ckpt_path:
 max_epochs: 60
 precision: bf16-mixed
-accumulate_grad_batches: 8
+accumulate_grad_batches: 3
 accelerator: gpu
 log_every_n_steps: 1
 detect_anomaly: false
