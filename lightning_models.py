@@ -436,6 +436,8 @@ class LitTBPS(L.LightningModule):
         self.test_img_data.clear()
         self.test_txt_data.clear()
         self.metrics_container.clear()
+        # Cast model to FP32 for higher precision inference
+        self.model.float()
 
     def on_test_epoch_end(self) -> None:
         """Process test results"""
