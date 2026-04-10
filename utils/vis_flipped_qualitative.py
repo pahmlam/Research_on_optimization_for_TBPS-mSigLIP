@@ -187,21 +187,23 @@ def detect_regression_cases(base_results, ours_results):
 
 
 # --- VISUALIZATION ---
-def denormalize(tensor, target_size=(256, 128)):
+def denormalize(tensor, target_size=(256, 128), brightness=1.2):
     if target_size is not None:
         tensor = F.interpolate(
             tensor.unsqueeze(0), size=target_size,
             mode='bicubic', align_corners=False).squeeze(0)
     mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(tensor.device)
     std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(tensor.device)
-    img = (tensor * std + mean).clamp(0, 1)
+    img = (tensor * std + mean) * brightness
+    img = img.clamp(0, 1)
     return img.permute(1, 2, 0).cpu().numpy()
 
 
 def save_single_comparison(pid, base_data, ours_data, output_path):
     """Save a single side-by-side comparison image for one PID."""
     cols = 1 + TOP_K + TOP_K + 1  # text + baseline topK + ours topK + GT
-    fig, axes = plt.subplots(1, cols, figsize=(3 * cols, 6))
+    fig, axes = plt.subplots(1, cols, figsize=(4 * cols, 8))
+    fig.patch.set_facecolor('white')
 
     # Text query
     ax_txt = axes[0]
@@ -264,7 +266,7 @@ def save_single_comparison(pid, base_data, ours_data, output_path):
                      pad=10, family='serif')
 
     plt.tight_layout()
-    plt.savefig(output_path, dpi=200, bbox_inches='tight')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
     plt.close(fig)
 
 
