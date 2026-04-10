@@ -3,7 +3,6 @@ import sys
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
-import numpy as np
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from torch.utils.data import DataLoader
@@ -15,7 +14,6 @@ if not OmegaConf.has_resolver("tuple"):
 if not OmegaConf.has_resolver("eval"):
     OmegaConf.register_new_resolver("eval", eval)
 
-# Import modules
 try:
     from safetensors.torch import load_file as load_safetensors
 except ImportError:
@@ -26,27 +24,25 @@ from lightning_models import LitTBPS
 from lightning_data import TBPSDataModule
 from data.bases import ImageDataset, TextDataset
 
-# --- CONFIGURATION ---
-TARGET_PIDS = [np.int64(2000), np.int64(2003), np.int64(2006), np.int64(2006), 
-               np.int64(2015), np.int64(2024), np.int64(2024), np.int64(2024), 
-               np.int64(2030), np.int64(2033)]
-
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 64
+TOP_K = 3
 
-# --- MODEL LOADING FUNCTIONS ---
+
+# --- MODEL LOADING ---
 def normalize_key(k):
-    garbage = ["model.", "backbone.", "base_model.", "image_encoder.", "text_encoder.", 
+    garbage = ["model.", "backbone.", "base_model.", "image_encoder.", "text_encoder.",
                "vision_model.", "text_model.", "encoder.", "module."]
     k_clean = k
-    for g in garbage: k_clean = k_clean.replace(g, "")
+    for g in garbage:
+        k_clean = k_clean.replace(g, "")
     return k_clean
+
 
 def aggressive_load(model, state_dict):
     model_state = model.state_dict()
     new_sd = {}
     ckpt_map = {normalize_key(k): k for k in state_dict.keys()}
-    
     for model_k in model_state.keys():
         clean = normalize_key(model_k)
         if clean in ckpt_map:
@@ -56,51 +52,40 @@ def aggressive_load(model, state_dict):
     model.load_state_dict(new_sd, strict=False)
     return model
 
+
 def load_model(config_path, ckpt_path, enable_lora):
     cfg = OmegaConf.load(config_path)
-    
-    if not enable_lora and "lora" in cfg: 
+    if not enable_lora and "lora" in cfg:
         del cfg["lora"]
-    
+
     dm = TBPSDataModule(cfg)
     dm.setup(stage='test')
-    
+
     model = LitTBPS(cfg, num_iters_per_epoch=1)
-    if enable_lora: 
+    if enable_lora:
         model.setup_lora(cfg.lora)
-        
+
     print(f"   Loading weights from: {ckpt_path}")
     ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
     state_dict = {k.replace("_orig_mod.", ""): v for k, v in ckpt['state_dict'].items()}
     aggressive_load(model, state_dict)
-    
+
     model.to(DEVICE).eval()
     return model, dm
 
-# --- IMAGE PROCESSING ---
-def denormalize(tensor, target_size=(256, 128)):
-    """Chuyển tensor về ảnh numpy, có resize."""
-    if target_size is not None:
-        tensor = F.interpolate(tensor.unsqueeze(0), size=target_size, mode='bicubic', align_corners=False).squeeze(0)
 
-    mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(tensor.device)
-    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(tensor.device)
-    
-    img = tensor * std + mean
-    img = img.clamp(0, 1)
-    
-    return img.permute(1, 2, 0).cpu().numpy()
-
-def get_rank_results(model, dm, target_pids):
-    # 1. Extract Gallery
+# --- EXTRACTION ---
+def extract_all_results(model, dm):
+    """Extract top-K retrieval results for ALL test queries."""
+    # 1. Gallery features
     gal_feats, gal_pids, gal_imgs = [], [], []
-    
-    loader = DataLoader(ImageDataset(dm.dataset.test, is_train=False, 
-                                     image_size=dm.config.aug.img.size, 
-                                     mean=dm.config.aug.img.mean, std=dm.config.aug.img.std),
-                        batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
-    
-    print("   Extracting Gallery...")
+    loader = DataLoader(
+        ImageDataset(dm.dataset.test, is_train=False,
+                     image_size=dm.config.aug.img.size,
+                     mean=dm.config.aug.img.mean, std=dm.config.aug.img.std),
+        batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+
+    print("   Extracting gallery...")
     with torch.no_grad():
         for batch in tqdm(loader):
             imgs = batch['images'].to(DEVICE)
@@ -108,165 +93,230 @@ def get_rank_results(model, dm, target_pids):
             gal_feats.append(f.cpu())
             gal_pids.append(batch['pids'])
             gal_imgs.append(batch['images'].cpu())
-            
+
     gal_feats = torch.cat(gal_feats)
     gal_pids = torch.cat(gal_pids)
     gal_imgs = torch.cat(gal_imgs)
 
-    # 2. Extract Queries
+    # 2. Query features + retrieval
     results = {}
-    txt_loader = DataLoader(TextDataset(dm.dataset.test, tokenizer=dm.tokenizer),
-                            batch_size=BATCH_SIZE, shuffle=False)
-    
-    print("   Scanning Queries...")
+    txt_loader = DataLoader(
+        TextDataset(dm.dataset.test, tokenizer=dm.tokenizer),
+        batch_size=BATCH_SIZE, shuffle=False)
+
+    print("   Extracting queries and ranking...")
     with torch.no_grad():
         for batch in txt_loader:
             pids = batch['pids']
-            mask = torch.isin(pids, torch.tensor(target_pids, device=pids.device))
-            if not mask.any(): continue
-            
             inputs = {}
             for k, v in batch.items():
                 if k in ['input_ids', 'attention_mask', 'caption_input_ids', 'caption_attention_mask']:
                     inputs[k] = v.to(DEVICE)
-            
+
             if 'caption_input_ids' in inputs:
                 inputs['input_ids'] = inputs.pop('caption_input_ids')
                 inputs['attention_mask'] = inputs.pop('caption_attention_mask')
 
             all_feats = F.normalize(model.get_text_features(inputs), dim=1).cpu()
-            indices = torch.where(mask)[0]
-            for idx in indices:
+
+            for idx in range(len(pids)):
                 pid = pids[idx].item()
-                if pid in results: continue 
-                
+                if pid in results:
+                    continue
+
                 feat = all_feats[idx].unsqueeze(0)
                 sims = torch.matmul(feat, gal_feats.t()).squeeze()
-                topk_vals, topk_idx = torch.topk(sims, k=3)
-                
+                topk_vals, topk_idx = torch.topk(sims, k=TOP_K)
+
                 top_imgs = [gal_imgs[i] for i in topk_idx]
                 top_pids = [gal_pids[i].item() for i in topk_idx]
-                
- 
-                gt_idx = (gal_pids == pid).nonzero(as_tuple=True)[0]
-                if len(gt_idx) > 0:
-                    gt_img = gal_imgs[gt_idx[0]] 
-                else:
-                    gt_img = None 
 
-                if 'caption_input_ids' in batch: raw_ids = batch['caption_input_ids'][idx]
-                else: raw_ids = batch['input_ids'][idx]
-                    
+                gt_idx = (gal_pids == pid).nonzero(as_tuple=True)[0]
+                gt_img = gal_imgs[gt_idx[0]] if len(gt_idx) > 0 else None
+
+                if 'caption_input_ids' in batch:
+                    raw_ids = batch['caption_input_ids'][idx]
+                else:
+                    raw_ids = batch['input_ids'][idx]
                 caption = dm.tokenizer.decode(raw_ids, skip_special_tokens=True)
-                
+
                 results[pid] = {
                     'caption': caption,
                     'top_imgs': top_imgs,
                     'top_pids': top_pids,
-                    'gt_img': gt_img, # Lưu ảnh GT
-                    'is_correct': [p == pid for p in top_pids]
+                    'top_sims': topk_vals.tolist(),
+                    'gt_img': gt_img,
+                    'is_correct': [p == pid for p in top_pids],
+                    'rank1_correct': top_pids[0] == pid,
                 }
+
     return results
 
-def plot_qualitative(base_res, ours_res, pids):
-    print("🎨 Drawing Flipped Cases...")
-    
-    rows = len(pids)
-    cols = 8 
-    
-    fig, axes = plt.subplots(rows, cols, figsize=(22, 6 * rows))
-    if rows == 1: axes = axes.reshape(1, -1)
-    
-    for r, pid in enumerate(pids):
-        if pid not in base_res or pid not in ours_res:
-            print(f"⚠️ PID {pid} missing. Skipping.")
+
+# --- DETECTION ---
+def detect_flipped_cases(base_results, ours_results):
+    """Find cases where baseline Rank@1 is WRONG but ours is CORRECT."""
+    flipped_pids = []
+    for pid in base_results:
+        if pid not in ours_results:
             continue
-            
-        b_data = base_res[pid]
-        o_data = ours_res[pid]
-        
-        # 1. Text Query (Cột 0)
-        ax_txt = axes[r, 0]
-        real_pid = pid + 1 
-        wrapped_text = "\n".join(textwrap.wrap(f"Query ID: {real_pid}\n(Model ID: {pid})\n\n{b_data['caption']}", width=25))
-        ax_txt.text(0.5, 0.5, wrapped_text, ha='center', va='center', fontsize=14, family='serif')
-        ax_txt.axis('off')
-        
-        # 2. Baseline Images (Cột 1-3)
-        for i in range(3):
-            ax = axes[r, 1+i]
-            img = denormalize(b_data['top_imgs'][i], target_size=(256, 128))
-            ax.imshow(img, interpolation='bicubic') 
-            
-            is_correct = b_data['is_correct'][i]
-            color = 'green' if is_correct else 'red'
-            width = 4 if is_correct else 2
-            
-            for spine in ax.spines.values():
-                spine.set_edgecolor(color)
-                spine.set_linewidth(width)
-                
-            ax.set_xticks([]); ax.set_yticks([])
-            if r == 0 and i == 1: 
-                ax.set_title("Baseline (mSigLIP)", fontsize=16, fontweight='bold', pad=15, family='serif')
-            
-            ax.text(5, 25, f"Rank-{i+1}", color='white', fontweight='bold', fontsize=12,
-                    bbox=dict(facecolor=color, alpha=0.8, pad=2, edgecolor='none'))
+        base_wrong = not base_results[pid]['rank1_correct']
+        ours_right = ours_results[pid]['rank1_correct']
+        if base_wrong and ours_right:
+            flipped_pids.append(pid)
 
-        # 3. Ours Images (Cột 4-6)
-        for i in range(3):
-            ax = axes[r, 4+i]
-            img = denormalize(o_data['top_imgs'][i], target_size=(256, 128))
-            ax.imshow(img, interpolation='bicubic')
-            
-            is_correct = o_data['is_correct'][i]
-            color = 'green' if is_correct else 'red'
-            width = 4 if is_correct else 2
-            
-            for spine in ax.spines.values():
-                spine.set_edgecolor(color)
-                spine.set_linewidth(width)
-                
-            ax.set_xticks([]); ax.set_yticks([])
-            if r == 0 and i == 1: 
-                ax.set_title("Ours (LoRA + Circle)", fontsize=16, fontweight='bold', pad=15, family ='serif')
-            
-            ax.text(5, 25, f"Rank-{i+1}", color='white', fontweight='bold', fontsize=12,
-                    bbox=dict(facecolor=color, alpha=0.8, pad=2, edgecolor='none'))
+    print(f"\n   Found {len(flipped_pids)} flipped cases "
+          f"(baseline wrong -> ours correct at Rank@1)")
+    return sorted(flipped_pids)
 
-        ax_gt = axes[r, 7]
-        gt_tensor = o_data['gt_img'] 
-        
-        if gt_tensor is not None:
-            img_gt = denormalize(gt_tensor, target_size=(256, 128))
-            ax_gt.imshow(img_gt, interpolation='bicubic')
-            
-            for spine in ax_gt.spines.values():
-                spine.set_edgecolor('blue')
-                spine.set_linewidth(3)
-        else:
-            ax_gt.text(0.5, 0.5, "GT Missing", ha='center', va='center')
-        
-        ax_gt.set_xticks([]); ax_gt.set_yticks([])
-        if r == 0:
-            ax_gt.set_title("Ground Truth\n(Reference)", fontsize=16, fontweight='bold', pad=15, family ='serif')
+
+def detect_regression_cases(base_results, ours_results):
+    """Find cases where baseline Rank@1 is CORRECT but ours is WRONG (regressions)."""
+    regression_pids = []
+    for pid in base_results:
+        if pid not in ours_results:
+            continue
+        base_right = base_results[pid]['rank1_correct']
+        ours_wrong = not ours_results[pid]['rank1_correct']
+        if base_right and ours_wrong:
+            regression_pids.append(pid)
+
+    print(f"   Found {len(regression_pids)} regression cases "
+          f"(baseline correct -> ours wrong at Rank@1)")
+    return sorted(regression_pids)
+
+
+# --- VISUALIZATION ---
+def denormalize(tensor, target_size=(256, 128)):
+    if target_size is not None:
+        tensor = F.interpolate(
+            tensor.unsqueeze(0), size=target_size,
+            mode='bicubic', align_corners=False).squeeze(0)
+    mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(tensor.device)
+    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(tensor.device)
+    img = (tensor * std + mean).clamp(0, 1)
+    return img.permute(1, 2, 0).cpu().numpy()
+
+
+def save_single_comparison(pid, base_data, ours_data, output_path):
+    """Save a single side-by-side comparison image for one PID."""
+    cols = 1 + TOP_K + TOP_K + 1  # text + baseline topK + ours topK + GT
+    fig, axes = plt.subplots(1, cols, figsize=(3 * cols, 6))
+
+    # Text query
+    ax_txt = axes[0]
+    wrapped = "\n".join(textwrap.wrap(
+        f"Query PID: {pid}\n\n{base_data['caption']}", width=25))
+    ax_txt.text(0.5, 0.5, wrapped, ha='center', va='center',
+                fontsize=11, family='serif')
+    ax_txt.axis('off')
+
+    # Baseline top-K
+    for i in range(TOP_K):
+        ax = axes[1 + i]
+        img = denormalize(base_data['top_imgs'][i], target_size=(256, 128))
+        ax.imshow(img, interpolation='bicubic')
+
+        is_correct = base_data['is_correct'][i]
+        color = 'green' if is_correct else 'red'
+        for spine in ax.spines.values():
+            spine.set_edgecolor(color)
+            spine.set_linewidth(4 if is_correct else 2)
+        ax.set_xticks([]); ax.set_yticks([])
+
+        ax.text(5, 25, f"Rank-{i+1}", color='white', fontweight='bold', fontsize=11,
+                bbox=dict(facecolor=color, alpha=0.8, pad=2, edgecolor='none'))
+        if i == TOP_K // 2:
+            ax.set_title("Baseline (mSigLIP)", fontsize=13,
+                         fontweight='bold', pad=10, family='serif')
+
+    # Ours top-K
+    for i in range(TOP_K):
+        ax = axes[1 + TOP_K + i]
+        img = denormalize(ours_data['top_imgs'][i], target_size=(256, 128))
+        ax.imshow(img, interpolation='bicubic')
+
+        is_correct = ours_data['is_correct'][i]
+        color = 'green' if is_correct else 'red'
+        for spine in ax.spines.values():
+            spine.set_edgecolor(color)
+            spine.set_linewidth(4 if is_correct else 2)
+        ax.set_xticks([]); ax.set_yticks([])
+
+        ax.text(5, 25, f"Rank-{i+1}", color='white', fontweight='bold', fontsize=11,
+                bbox=dict(facecolor=color, alpha=0.8, pad=2, edgecolor='none'))
+        if i == TOP_K // 2:
+            ax.set_title("Ours (mSigLIP-CLoRA)", fontsize=13,
+                         fontweight='bold', pad=10, family='serif')
+
+    # Ground truth
+    ax_gt = axes[-1]
+    if ours_data['gt_img'] is not None:
+        img_gt = denormalize(ours_data['gt_img'], target_size=(256, 128))
+        ax_gt.imshow(img_gt, interpolation='bicubic')
+        for spine in ax_gt.spines.values():
+            spine.set_edgecolor('blue')
+            spine.set_linewidth(3)
+    else:
+        ax_gt.text(0.5, 0.5, "GT Missing", ha='center', va='center')
+    ax_gt.set_xticks([]); ax_gt.set_yticks([])
+    ax_gt.set_title("Ground Truth", fontsize=13, fontweight='bold',
+                     pad=10, family='serif')
 
     plt.tight_layout()
-    plt.savefig("flipped_cases_visualization.png", dpi=300, bbox_inches='tight')
-    print("✅ Saved to flipped_cases_visualization.png")
+    plt.savefig(output_path, dpi=200, bbox_inches='tight')
+    plt.close(fig)
+
+
+def save_all_comparisons(base_results, ours_results, pids, output_dir):
+    """Save individual comparison images for a list of PIDs."""
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"\n   Saving {len(pids)} comparisons to {output_dir}/")
+    for pid in tqdm(pids):
+        if pid not in base_results or pid not in ours_results:
+            continue
+        path = os.path.join(output_dir, f"pid_{pid}.png")
+        save_single_comparison(pid, base_results[pid], ours_results[pid], path)
+
+
+def print_summary(base_results, ours_results):
+    """Print Rank@1 accuracy summary for both models."""
+    common_pids = set(base_results.keys()) & set(ours_results.keys())
+    base_correct = sum(1 for p in common_pids if base_results[p]['rank1_correct'])
+    ours_correct = sum(1 for p in common_pids if ours_results[p]['rank1_correct'])
+    total = len(common_pids)
+    print(f"\n   === Summary ({total} queries) ===")
+    print(f"   Baseline Rank@1: {base_correct}/{total} ({100*base_correct/total:.2f}%)")
+    print(f"   Ours     Rank@1: {ours_correct}/{total} ({100*ours_correct/total:.2f}%)")
+
 
 if __name__ == "__main__":
     CONFIG_PATH = "/mnt/data/user_data/lampt/PS/code/outputs/2026-01-16/10-20-32/.hydra/config.yaml"
-    CKPT_BASELINE = "/mnt/data/user_data/lampt/PS/code/epoch=56-val_score=49.15.ckpt" 
+    CKPT_BASELINE = "/mnt/data/user_data/lampt/PS/code/epoch=56-val_score=49.15.ckpt"
     CKPT_OURS = "/mnt/data/user_data/lampt/PS/code/checkpoints/vn3k-curri/epoch=53-val_score=51.30.ckpt"
+    OUTPUT_DIR = "qualitative_results"
 
+    # 1. Extract
     print(">>> Processing Baseline...")
     m_base, dm = load_model(CONFIG_PATH, CKPT_BASELINE, enable_lora=False)
-    res_base = get_rank_results(m_base, dm, TARGET_PIDS)
+    res_base = extract_all_results(m_base, dm)
     del m_base; torch.cuda.empty_cache()
 
     print("\n>>> Processing Ours...")
     m_ours, _ = load_model(CONFIG_PATH, CKPT_OURS, enable_lora=True)
-    res_ours = get_rank_results(m_ours, dm, TARGET_PIDS)
-    
-    plot_qualitative(res_base, res_ours, TARGET_PIDS)
+    res_ours = extract_all_results(m_ours, dm)
+    del m_ours; torch.cuda.empty_cache()
+
+    # 2. Detect
+    print_summary(res_base, res_ours)
+    flipped = detect_flipped_cases(res_base, res_ours)
+    regressions = detect_regression_cases(res_base, res_ours)
+
+    # 3. Save
+    save_all_comparisons(res_base, res_ours, flipped,
+                         os.path.join(OUTPUT_DIR, "flipped"))
+    if regressions:
+        save_all_comparisons(res_base, res_ours, regressions,
+                             os.path.join(OUTPUT_DIR, "regressions"))
+
+    print(f"\n   Done! Flipped: {len(flipped)}, Regressions: {len(regressions)}")
