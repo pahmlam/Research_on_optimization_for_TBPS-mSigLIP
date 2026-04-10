@@ -20,9 +20,9 @@ except ImportError:
     print("Please install safetensors: pip install safetensors")
     sys.exit(1)
 
-from ..lightning_models import LitTBPS
-from ..lightning_data import TBPSDataModule
-from ..data.bases import ImageDataset, TextDataset
+from lightning_models import LitTBPS
+from lightning_data import TBPSDataModule
+from data.bases import ImageDataset, TextDataset
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 64
@@ -293,9 +293,9 @@ def print_summary(base_results, ours_results):
 
 
 if __name__ == "__main__":
-    CONFIG_PATH = "/mnt/data/user_data/lampt/PS/code/outputs/2026-01-16/10-20-32/.hydra/config.yaml"
+    CONFIG_PATH = "/mnt/data/user_data/lampt/PS/code/outputs/2026-04-09/07-46-10/.hydra/config.yaml"
     CKPT_BASELINE = "/mnt/data/user_data/lampt/PS/code/epoch=56-val_score=49.15.ckpt"
-    CKPT_OURS = "/mnt/data/user_data/lampt/PS/code/checkpoints/vn3k-curri/epoch=53-val_score=51.30.ckpt"
+    CKPT_OURS = "/mnt/data/user_data/lampt/PS/code/outputs/2026-04-09/07-46-10/checkpoints/epoch=56-val_score=52.28.ckpt"
     OUTPUT_DIR = "qualitative_results"
 
     # 1. Extract
