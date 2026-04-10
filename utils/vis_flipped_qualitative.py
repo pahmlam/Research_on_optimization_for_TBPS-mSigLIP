@@ -187,14 +187,14 @@ def detect_regression_cases(base_results, ours_results):
 
 
 # --- VISUALIZATION ---
-def denormalize(tensor, target_size=(256, 128), brightness=1.2):
+def denormalize(tensor, target_size=(256, 128)):
     if target_size is not None:
         tensor = F.interpolate(
             tensor.unsqueeze(0), size=target_size,
             mode='bicubic', align_corners=False).squeeze(0)
     mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(tensor.device)
     std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(tensor.device)
-    img = (tensor * std + mean) * brightness
+    img = tensor * std + mean
     img = img.clamp(0, 1)
     return img.permute(1, 2, 0).cpu().numpy()
 
