@@ -20,9 +20,9 @@ except ImportError:
     print("Please install safetensors: pip install safetensors")
     sys.exit(1)
 
-from lightning_models import LitTBPS
-from lightning_data import TBPSDataModule
-from data.bases import ImageDataset, TextDataset
+from ..lightning_models import LitTBPS
+from ..lightning_data import TBPSDataModule
+from ..data.bases import ImageDataset, TextDataset
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 64
