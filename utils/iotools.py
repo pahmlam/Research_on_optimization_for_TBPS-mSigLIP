@@ -15,20 +15,18 @@ from easydict import EasyDict as edict
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
-def read_image(img_path):
+def read_image(img_path, max_retries=3):
     """Keep reading image until succeed.
     This can avoid IOError incurred by heavy IO process."""
-    got_img = False
     if not osp.exists(img_path):
         raise IOError("{} does not exist".format(img_path))
-    while not got_img:
+    for attempt in range(max_retries):
         try:
             img = Image.open(img_path).convert('RGB')
-            got_img = True
+            return img
         except IOError:
-            print("IOError incurred when reading '{}'. Will redo. Don't worry. Just chill.".format(img_path))
-            pass
-    return img
+            print("IOError incurred when reading '{}'. Retry {}/{}".format(img_path, attempt + 1, max_retries))
+    raise IOError("Failed to read '{}' after {} retries".format(img_path, max_retries))
 
 
 def mkdir_if_missing(directory):

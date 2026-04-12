@@ -22,6 +22,7 @@ from data.vn3k_mixed import VN3K_MIXED
 from data.vn3k_vi import VN3K_VI
 from data.vn3k_en import VN3K_EN
 from data.cuhk_10_percent_vn3k_mix import TenPercentCUHK_VN3KMIX
+from data.prw_tps_cn import PRW_TPS_CN
 
 # from utils.comm import get_world_size
 from utils.tokenizer_utils import get_tokenizer
@@ -42,6 +43,7 @@ class TBPSDataModule(pl.LightningDataModule):
             "VN3K_VI": VN3K_VI,
             "VN3K_MIXED": VN3K_MIXED,
             "TEN_PERCENT_CUHK_VN3K_MIX": TenPercentCUHK_VN3KMIX,
+            "PRW_TPS_CN": PRW_TPS_CN,
         }
         self.config = config
         print(config.dataset.dataset_name)

@@ -1,0 +1,8 @@
+dataset_name: PRW_TPS_CN
+text_length: ${tokenizer.model_max_length}
+batch_size: 24
+sampler: identity
+test_batch_size: 64
+num_instance: 4
+num_workers: 4
+proportion: null

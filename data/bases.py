@@ -174,7 +174,10 @@ class ImageTextDataset(PreloadedDataset):
 
     def __getitem__(self, index):
         pid, image_id, img_path, caption = self.dataset[index]
-        original_img = read_image(img_path)
+        try:
+            original_img = read_image(img_path)
+        except IOError:
+            return self.__getitem__((index + 1) % len(self.dataset))
 
         # Get two augmentations of the same image for contrastive learning
         img = self.apply_image_transform(original_img)
