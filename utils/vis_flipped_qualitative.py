@@ -187,19 +187,22 @@ def detect_regression_cases(base_results, ours_results):
 
 
 # --- VISUALIZATION ---
-def denormalize(tensor, target_size=(256, 128)):
+def denormalize(tensor, mean, std, target_size=(256, 128)):
+    # Dùng bilinear để resize sắc nét hơn bicubic, không dùng brightness nhân ảo
     if target_size is not None:
         tensor = F.interpolate(
             tensor.unsqueeze(0), size=target_size,
-            mode='bicubic', align_corners=False).squeeze(0)
-    mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(tensor.device)
-    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(tensor.device)
-    img = tensor * std + mean
-    img = img.clamp(0, 1)
+            mode='bilinear', align_corners=False).squeeze(0)
+            
+    mean_t = torch.tensor(mean).view(3, 1, 1).to(tensor.device)
+    std_t = torch.tensor(std).view(3, 1, 1).to(tensor.device)
+    
+    img = tensor * std_t + mean_t
+    img = img.clamp(0, 1) # Ép chuẩn về khoảng 0-1
     return img.permute(1, 2, 0).cpu().numpy()
 
 
-def save_single_comparison(pid, base_data, ours_data, output_path):
+def save_single_comparison(pid, base_data, ours_data, output_path, img_mean, img_std):
     """Save a single side-by-side comparison image for one PID."""
     cols = 1 + TOP_K + TOP_K + 1  # text + baseline topK + ours topK + GT
     fig, axes = plt.subplots(1, cols, figsize=(4 * cols, 8))
@@ -216,8 +219,8 @@ def save_single_comparison(pid, base_data, ours_data, output_path):
     # Baseline top-K
     for i in range(TOP_K):
         ax = axes[1 + i]
-        img = denormalize(base_data['top_imgs'][i], target_size=(256, 128))
-        ax.imshow(img, interpolation='bicubic')
+        img = denormalize(base_data['top_imgs'][i], mean=img_mean, std=img_std, target_size=(256, 128))
+        ax.imshow(img) # Bỏ interpolation='bicubic' để matplotlib tự tối ưu độ nét
 
         is_correct = base_data['is_correct'][i]
         color = 'green' if is_correct else 'red'
@@ -235,8 +238,8 @@ def save_single_comparison(pid, base_data, ours_data, output_path):
     # Ours top-K
     for i in range(TOP_K):
         ax = axes[1 + TOP_K + i]
-        img = denormalize(ours_data['top_imgs'][i], target_size=(256, 128))
-        ax.imshow(img, interpolation='bicubic')
+        img = denormalize(ours_data['top_imgs'][i], mean=img_mean, std=img_std, target_size=(256, 128))
+        ax.imshow(img)
 
         is_correct = ours_data['is_correct'][i]
         color = 'green' if is_correct else 'red'
@@ -254,8 +257,8 @@ def save_single_comparison(pid, base_data, ours_data, output_path):
     # Ground truth
     ax_gt = axes[-1]
     if ours_data['gt_img'] is not None:
-        img_gt = denormalize(ours_data['gt_img'], target_size=(256, 128))
-        ax_gt.imshow(img_gt, interpolation='bicubic')
+        img_gt = denormalize(ours_data['gt_img'], mean=img_mean, std=img_std, target_size=(256, 128))
+        ax_gt.imshow(img_gt)
         for spine in ax_gt.spines.values():
             spine.set_edgecolor('blue')
             spine.set_linewidth(3)
@@ -270,7 +273,7 @@ def save_single_comparison(pid, base_data, ours_data, output_path):
     plt.close(fig)
 
 
-def save_all_comparisons(base_results, ours_results, pids, output_dir):
+def save_all_comparisons(base_results, ours_results, pids, output_dir, img_mean, img_std):
     """Save individual comparison images for a list of PIDs."""
     os.makedirs(output_dir, exist_ok=True)
     print(f"\n   Saving {len(pids)} comparisons to {output_dir}/")
@@ -278,7 +281,7 @@ def save_all_comparisons(base_results, ours_results, pids, output_dir):
         if pid not in base_results or pid not in ours_results:
             continue
         path = os.path.join(output_dir, f"pid_{pid}.png")
-        save_single_comparison(pid, base_results[pid], ours_results[pid], path)
+        save_single_comparison(pid, base_results[pid], ours_results[pid], path, img_mean, img_std)
 
 
 def print_summary(base_results, ours_results):
@@ -314,11 +317,15 @@ if __name__ == "__main__":
     flipped = detect_flipped_cases(res_base, res_ours)
     regressions = detect_regression_cases(res_base, res_ours)
 
+    # Lấy thông số chuẩn hóa chính xác từ config thay vì hardcode
+    img_mean = dm.config.aug.img.mean
+    img_std = dm.config.aug.img.std
+
     # 3. Save
     save_all_comparisons(res_base, res_ours, flipped,
-                         os.path.join(OUTPUT_DIR, "flipped"))
+                         os.path.join(OUTPUT_DIR, "flipped"), img_mean, img_std)
     if regressions:
         save_all_comparisons(res_base, res_ours, regressions,
-                             os.path.join(OUTPUT_DIR, "regressions"))
+                             os.path.join(OUTPUT_DIR, "regressions"), img_mean, img_std)
 
     print(f"\n   Done! Flipped: {len(flipped)}, Regressions: {len(regressions)}")
