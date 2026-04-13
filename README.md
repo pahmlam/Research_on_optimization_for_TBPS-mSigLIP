@@ -43,6 +43,44 @@ Our method transforms the embedding space geometry. By applying a **Curriculum H
 
 ---
 
+## 📐 Mathematical Formulation
+
+### Baseline Objective (TBPS-mSigLIP)
+
+The baseline optimizes a multi-task objective over $L_2$-normalized image embeddings $\mathbf{v}_i$ and text embeddings $\mathbf{u}_i$:
+
+$$\mathcal{L}_{\text{base}} = \alpha_1 \mathcal{L}_{N\text{-}ITC} + \alpha_2 \mathcal{L}_{MVS} + \alpha_3 \mathcal{L}_{C\text{-}ITC} + \alpha_4 \mathcal{L}_{SS}$$
+
+**N-ITC** (Noise-robust Image-Text Contrastive) — sigmoid-based pairwise alignment:
+
+$$\mathcal{L}_{N\text{-}ITC} = -\frac{1}{N}\sum_{i=1}^{N}\sum_{j=1}^{N} \log\sigma\!\left(z_{ij}\left(\gamma\,\mathbf{v}_i^\top\mathbf{u}_j - c\right)\right)$$
+
+where $z_{ij} \in \{+1, -1\}$ indicates matched pairs, and $\gamma, c$ are learned scale and bias.
+
+### Auxiliary Cross-Modal Circle Loss
+
+We introduce Circle Loss to explicitly mine hard negatives via adaptive pair-wise re-weighting:
+
+$$\mathcal{L}_{\text{circle}} = \log\left[1 + \sum_{j \in \mathcal{N}} e^{\gamma\,\alpha_n^j(s_n^j - m)} \cdot \sum_{i \in \mathcal{P}} e^{-\gamma\,\alpha_p^i(s_p^i - (1-m))}\right]$$
+
+where $\mathcal{P}$, $\mathcal{N}$ are positive/negative pair sets, $s$ is cosine similarity, $\gamma=128$ is the scale factor, and $m=0.35$ is the margin. The adaptive weights:
+
+$$\alpha_p^i = [1 + m - s_p^i]_+, \qquad \alpha_n^j = [s_n^j + m]_+$$
+
+dynamically amplify gradients for hard samples (poorly separated pairs) while suppressing well-separated ones.
+
+### Total Objective with Curriculum Schedule
+
+$$\mathcal{L} = \mathcal{L}_{\text{base}} + \alpha_5(t) \cdot \mathcal{L}_{\text{circle}}$$
+
+The curriculum schedule for $\alpha_5(t)$ prevents early disruption of global alignment:
+
+$$\alpha_5(t) = \begin{cases} 0 & t \leq T_{\text{warmup}} \\ \alpha_{\max} \cdot \dfrac{t - T_{\text{warmup}}}{T_{\text{ramp}}} & T_{\text{warmup}} < t \leq T_{\text{warmup}} + T_{\text{ramp}} \\ \alpha_{\max} & t > T_{\text{warmup}} + T_{\text{ramp}} \end{cases}$$
+
+with $T_{\text{warmup}}=5$, $T_{\text{ramp}}=15$, $\alpha_{\max}=0.1$.
+
+---
+
 ## 📊 Experimental Results
 
 We evaluate our method on **3000VnPersonSearch** (Low-resource, Vietnamese), **CUHK-PEDES** (High-resource, English), and **PRW-TPS-CN** (Chinese).
