@@ -75,9 +75,11 @@ $$\mathcal{L} = \mathcal{L}_{\text{base}} + \alpha_5(t) \cdot \mathcal{L}_{\text
 
 The curriculum schedule for $\alpha_5(t)$ prevents early disruption of global alignment:
 
-$$\alpha_5(t) = \begin{cases} 0 & t \leq T_{\text{warmup}} \\ \alpha_{\max} \cdot \dfrac{t - T_{\text{warmup}}}{T_{\text{ramp}}} & T_{\text{warmup}} < t \leq T_{\text{warmup}} + T_{\text{ramp}} \\ \alpha_{\max} & t > T_{\text{warmup}} + T_{\text{ramp}} \end{cases}$$
-
-with $T_{\text{warmup}}=5$, $T_{\text{ramp}}=15$, $\alpha_{\max}=0.1$.
+| Epoch $t$ | $\alpha_5(t)$ | Phase |
+|---|---|---|
+| $t \leq 5$ | $0$ | Warmup (Circle off) |
+| $5 < t \leq 20$ | $0.1 \times \frac{t - 5}{15}$ | Linear ramp |
+| $t > 20$ | $0.1$ | Stable |
 
 ---
 
