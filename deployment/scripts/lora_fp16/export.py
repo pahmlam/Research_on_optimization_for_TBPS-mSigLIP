@@ -27,7 +27,7 @@ import yaml
 # Add deployment root to path (lora_fp16/ → scripts/ → deployment/)
 _deployment_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _deployment_root)
-from utils import TeeLogger
+from deploy_utils import TeeLogger
 
 # Add project root to path (deployment/ → project root)
 sys.path.insert(0, os.path.dirname(_deployment_root))

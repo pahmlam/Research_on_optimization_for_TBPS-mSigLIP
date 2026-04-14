@@ -14,7 +14,7 @@ import torch
 
 # Add deployment root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils import TeeLogger
+from deploy_utils import TeeLogger
 
 
 def analyze(ckpt_path: str):

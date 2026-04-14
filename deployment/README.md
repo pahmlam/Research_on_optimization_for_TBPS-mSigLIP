@@ -27,7 +27,7 @@ deployment/
 │   └── benchmark-rp.md            # Hardware benchmark results
 │
 ├── logs/                          # Auto-generated logs (timestamped)
-├── utils.py                       # Shared utilities (TeeLogger)
+├── deploy_utils.py                # Shared utilities (TeeLogger)
 └── README.md
 ```
 
