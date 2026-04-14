@@ -3,7 +3,7 @@ Step 2: Export checkpoint to inference-ready formats.
 Merges LoRA into base model, strips optimizer states, converts to FP16 and optionally ONNX.
 
 Usage:
-    python 02_export_inference.py \
+    python deployment/scripts/lora_fp16/export.py \
         --ckpt epoch=53-val_score=51.30.ckpt \
         --output-dir exported_model \
         --format pytorch           # or: onnx, both
@@ -24,8 +24,13 @@ import sys
 import torch
 import yaml
 
-# Add project root to path (deployment/scripts/ → project root)
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+# Add deployment root to path (lora_fp16/ → scripts/ → deployment/)
+_deployment_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, _deployment_root)
+from utils import TeeLogger
+
+# Add project root to path (deployment/ → project root)
+sys.path.insert(0, os.path.dirname(_deployment_root))
 
 from omegaconf import OmegaConf, DictConfig
 
@@ -217,4 +222,7 @@ def main():
 
 
 if __name__ == "__main__":
+    log_dir = os.path.join(_deployment_root, "logs")
+    logger = TeeLogger(log_dir, "export_lora_fp16")
     main()
+    logger.close()

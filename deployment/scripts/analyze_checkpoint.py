@@ -7,7 +7,14 @@ Usage:
 """
 
 import argparse
+import os
+import sys
+
 import torch
+
+# Add deployment root to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils import TeeLogger
 
 
 def analyze(ckpt_path: str):
@@ -128,4 +135,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt", required=True, help="Path to Lightning checkpoint")
     args = parser.parse_args()
+
+    log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+    logger = TeeLogger(log_dir, "analyze")
     analyze(args.ckpt)
+    logger.close()

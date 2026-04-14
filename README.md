@@ -3,27 +3,27 @@
 
 # Hard Negative-Aware Optimization for Multilingual TBPS via Adaptive Cross-Modal Circle Loss
 
-This repository contains the official implementation for the paper: **"Hard Negative-Aware Optimization for Multilingual Text-Based Person Search via Adaptive Cross-Modal Circle Loss"**.
+This repository contains the official implementation for the paper: **"Hard Negative-Aware Optimization for Multilingual Text-Based Person Search via Adaptive Cross-Modal Circle Loss"**, along with ongoing work on noise-robust learning and edge deployment on the **Qualcomm RB3 Gen2**.
 
-## 📖 Abstract
+##  Abstract
 
 Multilingual Text-Based Person Search (TBPS) remains challenging in low-resource settings due to ambiguous cross-modal alignment. Although recent methods such as TBPS-mSigLIP employ noise-robust contrastive learning, they suffer from **limited gradient discrimination** between easy and hard negatives.
 
-To address this, we propose an efficient optimization framework that integrates **Cross-modal Circle Loss** with **Low-Rank Adaptation (LoRA)**. Circle Loss enhances fine-grained discrimination via adaptive pair-wise re-weighting, while LoRA stabilizes training by constraining optimization to a low-rank subspace. We further introduce a **Curriculum Hard-Mining Schedule** to balance alignment stability and discrimination. Experiments across three typologically diverse languages — Vietnamese, English, and Chinese — demonstrate consistent improvements, establishing a new state-of-the-art **Rank@1 accuracy of 52.28%** on VnPersonSearch and **59.35%** on PRW-TPS-CN, with only **1.57% trainable parameters**.
+To address this, we propose an efficient optimization framework that integrates **Cross-modal Circle Loss** with **Low-Rank Adaptation (LoRA)**. Circle Loss enhances fine-grained discrimination via adaptive pair-wise re-weighting, while LoRA stabilizes training by constraining optimization to a low-rank subspace. We further introduce a **Curriculum Hard-Mining Schedule** to balance alignment stability and discrimination. Experiments across three typologically diverse languages — Vietnamese, English, and Chinese — demonstrate consistent improvements, establishing a new state-of-the-art **Rank@1 accuracy of 52.28%** on VnPersonSearch and **59.35%** on PRW-TPS-CN, with only **1.57% trainable parameters**. Additionally, we are exploring noise-robust learning strategies and deploying the optimized model on edge hardware (Qualcomm RB3 Gen2) for real-time inference.
 
 ---
 
-## 🚀 Framework Architecture
+##  Framework Architecture
 
 We propose a unified framework constructed upon the **mSigLIP** foundation model. To bridge the gap in hard-negative mining, we incorporate an **Auxiliary Cross-Modal Circle Loss** for geometric refinement and utilize **LoRA** on the Transformer backbone (Query, Key, Value, Output projections) to ensure optimization stability and memory efficiency (allowing **3x** larger batch sizes). Only **5.9M / 376M parameters (1.57%)** are trainable.
 
-![Sơ đồ kiến trúc tổng thể](figures/framework.png)
+![Framework Architecture](figures/framework.png)
 
 *Figure 1: The overall architecture of the proposed Multilingual TBPS framework. It features a dual-pathway optimization: (1) The baseline noise-robust objectives (N-ITC, etc.) for global alignment, and (2) An auxiliary Circle Loss branch for explicit hard-negative mining, stabilized by LoRA.*
 
 ---
 
-## 💡 Key Contributions & Analysis
+##  Key Contributions & Analysis
 
 ### 1. Theoretical Gradient Analysis
 
@@ -43,7 +43,7 @@ Our method transforms the embedding space geometry. By applying a **Curriculum H
 
 ---
 
-## 📐 Mathematical Formulation
+##  Mathematical Formulation
 
 ### Baseline Objective (TBPS-mSigLIP)
 
@@ -83,7 +83,7 @@ The curriculum schedule for $\alpha_5(t)$ prevents early disruption of global al
 
 ---
 
-## 📊 Experimental Results
+##  Experimental Results
 
 We evaluate our method on **3000VnPersonSearch** (Low-resource, Vietnamese), **CUHK-PEDES** (High-resource, English), and **PRW-TPS-CN** (Chinese).
 
@@ -126,7 +126,74 @@ The baseline often retrieves visually similar distractors (hard negatives). Our 
 
 ---
 
-## 🛠️ Installation
+##  Repository Structure
+
+```
+├── trainer.py                  # Training entry point (Hydra)
+├── lightning_models.py         # LitTBPS (PyTorch Lightning module)
+├── lightning_data.py           # TBPSDataModule (data loading, augmentation)
+├── test.py                     # Evaluation script
+├── workspace.ipynb             # Experiment notebook (embedding analysis, loss playground)
+├── run_cir_loss.sh             # Training script (LoRA + Curriculum Circle Loss)
+├── run_full_finetune.sh        # Training script (full fine-tuning baseline)
+│
+├── model/                      # Model architecture
+│   ├── tbps.py                 # TBPS forward pass & loss routing
+│   ├── objectives.py           # Loss functions (N-ITC, Circle, C-ITC, SimCLR)
+│   ├── reid_objectives.py      # ReID-specific objectives
+│   ├── build.py                # Backbone builder with layer resize
+│   ├── lora.py                 # LoRA integration via PEFT
+│   └── siglip/                 # mSigLIP model implementation
+│
+├── data/                       # Dataset classes & augmentation
+│   ├── vn3k_vi.py              # VN3K Vietnamese
+│   ├── vn3k_en.py              # VN3K English
+│   ├── vn3k_mixed.py           # VN3K mixed-language
+│   ├── cuhkpedes.py            # CUHK-PEDES
+│   ├── prw_tps_cn.py           # PRW-TPS-CN (Chinese)
+│   ├── bases.py                # Base dataset classes
+│   ├── sampler.py              # RandomIdentitySampler
+│   └── augmentation/           # Image & text augmentation
+│
+├── solver/                     # Optimization
+│   ├── build.py                # Optimizer with param groups
+│   └── lr_scheduler.py         # Cosine LR with warmup
+│
+├── config/                     # Hydra configuration
+│   ├── cir_msiglip.yaml        # Main config (composes sub-configs)
+│   ├── loss/                   # Loss flags & weights
+│   ├── backbone/               # Backbone settings
+│   ├── trainer/                # Training hyperparams
+│   ├── optimizer/              # AdamW param groups
+│   ├── scheduler/              # LR schedule
+│   ├── lora/                   # LoRA config
+│   ├── dataset/                # Dataset paths
+│   ├── tokenizer/              # Tokenizer settings
+│   ├── logger/                 # W&B logger config
+│   └── aug/                    # Augmentation settings
+│
+├── utils/                      # Utilities (metrics, visualization, tokenizer)
+├── scripts/                    # Helper scripts (checkpoint prep, extraction)
+├── experiments/                # Experiment logs & ablation notes
+├── knowledge/                  # Research notes & paper drafts
+├── figures/                    # Paper figures
+├── docs/                       # Documentation
+│   ├── ARCHITECTURE.md         # Full architecture with diagrams
+│   ├── EXPERIMENT_SUMMARY.md   # Results table & training config
+│   └── knowledge.md            # Knowledge base (Vietnamese)
+│
+├── deployment/                 # Edge deployment & compression
+│   ├── scripts/                # mSigLIP pipeline (each approach in subfolder)
+│   ├── hardware_profiling/     # RB3 hardware testing (proxy models)
+│   ├── logs/                   # Auto-generated logs (timestamped)
+│   └── docs/                   # Deployment documentation
+│
+└── ref/                        # Reference implementations (RDE, etc.)
+```
+
+---
+
+##  Installation
 
 ### 1. Clone and Setup
 
@@ -158,7 +225,7 @@ uv run scripts/prepare_checkpoints.py
 
 ---
 
-## 🏃 Training
+##  Training
 
 To reproduce the results, use the provided scripts. We utilize LoRA to enable large batch sizes (BS=24 on 12GB VRAM).
 
@@ -181,13 +248,13 @@ uv run trainer.py -cn m_siglip img_size_str="'(256,256)'" dataset=vn3k loss.soft
 
 ---
 
-## 🔬 Ongoing Work
+## Ongoing Work
 
 - **Noise Handling** — Investigating noise-robust learning strategies to improve training stability and robustness against noisy text-image pairs in low-resource settings.
-- **Hardware Deployment** — Optimizing and deploying the model on edge devices (Qualcomm RB3 Gen2) via ONNX export, quantization, and SNPE acceleration for real-time inference.
+- **Edge Deployment** — Optimizing and deploying the model on the Qualcomm RB3 Gen2 (QCS6490, 4GB RAM, ARM64) via LoRA merging, FP16/ONNX export, and Qualcomm SNPE acceleration. See [`deployment/`](deployment/) for scripts and documentation.
 
 ---
 
-## 📧 Contact
+##  Contact
 
 For any questions, please open an issue or contact the authors.

@@ -1,42 +1,49 @@
 # Edge Deployment & Model Compression
 
-Phần này chứa toàn bộ code và tài liệu liên quan đến việc tối ưu hóa và triển khai mô hình mSigLIP lên thiết bị edge (Qualcomm RB3 Gen2).
+Code and documentation for optimizing and deploying the mSigLIP model on edge devices (Qualcomm RB3 Gen2).
 
-## Cấu trúc
+## Structure
 
 ```
 deployment/
-├── docs/                          # Tài liệu triển khai
-│   ├── system.md                  # Thông số phần cứng RB3 Gen2
-│   ├── experiment.md              # Hướng dẫn benchmark step-by-step
-│   └── benchmark-rp.md            # Kết quả benchmark (PyTorch, ONNX, SNPE)
+├── scripts/                       # mSigLIP deployment pipeline
+│   ├── analyze_checkpoint.py      # Shared: Analyze checkpoint (size, RAM, compatibility)
+│   ├── inference_test.py          # Shared: Test inference on target device
+│   └── lora_fp16/                 # Approach: LoRA merge + FP16 + ONNX
+│       └── export.py              #   Export model (merge LoRA → FP16/ONNX)
 │
-├── scripts/                       # Scripts export & inference
-│   ├── analyze_checkpoint.py      # Phân tích checkpoint (size, RAM, compatibility)
-│   ├── export_inference.py        # Export model: merge LoRA → FP16/ONNX
-│   └── inference_test.py          # Test inference trên thiết bị đích
+├── hardware_profiling/            # RB3 hardware capability testing (proxy models)
+│   ├── benchmark.py               # PyTorch CPU vs ONNX Runtime (MobileNetV2, ResNet18)
+│   ├── snpe_benchmark.py          # Qualcomm SNPE benchmark (requires DLC models)
+│   ├── collect_sysinfo.sh         # Collect system information
+│   ├── install_deps.sh            # Install dependencies on device
+│   └── run_all.sh                 # Run full hardware profiling suite
 │
-└── benchmark/                     # Scripts benchmark trên RB3
-    ├── collect_sysinfo.sh         # Thu thập thông tin hệ thống
-    ├── install_deps.sh            # Cài đặt dependencies
-    ├── benchmark.py               # Benchmark PyTorch CPU vs ONNX Runtime
-    ├── snpe_benchmark.py          # Benchmark Qualcomm SNPE (cần DLC models)
-    └── run_all.sh                 # Chạy toàn bộ benchmark suite
+├── docs/                          # Documentation
+│   ├── system.md                  # RB3 Gen2 hardware specifications
+│   ├── experiment.md              # Benchmark step-by-step guide
+│   └── benchmark-rp.md            # Hardware benchmark results
+│
+├── logs/                          # Auto-generated logs (timestamped)
+├── utils.py                       # Shared utilities (TeeLogger)
+└── README.md
 ```
 
-## Pipeline triển khai
+All scripts in `scripts/` and `hardware_profiling/` auto-log terminal output to `logs/`.
+
+## Deployment Pipeline
 
 ```
 Training (GPU server)           →  Export (dev machine)        →  Deploy (RB3 Gen2)
 ━━━━━━━━━━━━━━━━━━━             ━━━━━━━━━━━━━━━━━━━           ━━━━━━━━━━━━━━━━━━━
 trainer.py                         export_inference.py            inference_test.py
 epoch=53.ckpt (1.4 GB)      →     model_fp16.pt (~740 MB)   →   torch.load() + inference
-                                   - Bỏ optimizer states
-                                   - Merge LoRA vào base
+                                   - Strip optimizer states
+                                   - Merge LoRA into base
                                    - FP32 → FP16
 ```
 
-## Thiết bị đích
+## Target Device
 
 | Component | Specification |
 |-----------|--------------|
@@ -46,16 +53,18 @@ epoch=53.ckpt (1.4 GB)      →     model_fp16.pt (~740 MB)   →   torch.load()
 | **DSP** | Hexagon 770 |
 | **RAM** | 5.2 GB (available ~4 GB) |
 
-## Sử dụng
+## Usage
 
-### 1. Phân tích checkpoint
+All scripts auto-log to `deployment/logs/` with timestamps.
+
+### 1. Analyze checkpoint
 ```bash
 python deployment/scripts/analyze_checkpoint.py --ckpt path/to/checkpoint.ckpt
 ```
 
-### 2. Export model
+### 2. Export model (LoRA merge + FP16 + ONNX)
 ```bash
-python deployment/scripts/export_inference.py \
+python deployment/scripts/lora_fp16/export.py \
     --ckpt epoch=53-val_score=51.30.ckpt \
     --output-dir exported_model \
     --format both  # pytorch + onnx
@@ -69,9 +78,9 @@ python deployment/scripts/inference_test.py \
     --dataset-root /path/to/VN3K
 ```
 
-### 4. Benchmark trên RB3
+### 4. Hardware profiling on RB3 (proxy models)
 ```bash
-# SSH vào RB3, copy benchmark/ sang device
+# SSH to RB3, copy hardware_profiling/ to device
 cd ~/sigm
 ./run_all.sh
 ```

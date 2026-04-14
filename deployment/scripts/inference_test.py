@@ -25,6 +25,10 @@ import gc
 
 import numpy as np
 
+# Add deployment root to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils import TeeLogger
+
 # Add project root to path (deployment/scripts/ → project root)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -361,4 +365,7 @@ def main():
 
 
 if __name__ == "__main__":
+    log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+    logger = TeeLogger(log_dir, "inference")
     main()
+    logger.close()
