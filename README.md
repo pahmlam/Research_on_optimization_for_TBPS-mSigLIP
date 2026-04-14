@@ -173,6 +173,13 @@ uv run trainer.py -cn m_siglip img_size_str="'(256,256)'" dataset=vn3k loss.soft
 
 ---
 
+## 🔬 Ongoing Work
+
+- **Noise Handling** — Investigating noise-robust learning strategies to improve training stability and robustness against noisy text-image pairs in low-resource settings.
+- **Hardware Deployment** — Optimizing and deploying the model on edge devices (Qualcomm RB3 Gen2) via ONNX export, quantization, and SNPE acceleration for real-time inference.
+
+---
+
 ## 📧 Contact
 
 For any questions, please open an issue or contact the authors.
