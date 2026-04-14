@@ -1,14 +1,13 @@
 # Knowledge Base
 
 > Tài liệu kiến thức tích lũy trong quá trình nghiên cứu và phát triển mSigLIP.
-> Mỗi mục ghi lại: **định nghĩa** các khái niệm liên quan, **vì sao** cần làm, **làm gì**, **làm như thế nào**, và **suy nghĩ/cách tiếp cận** của Claude khi giải quyết vấn đề.
+> Mỗi mục ghi lại: **định nghĩa** các khái niệm liên quan, **vì sao** cần làm, **làm gì**, **làm như thế nào**, và **suy nghĩ/cách tiếp cận**  khi giải quyết vấn đề.
 
 ---
 
 ## Mục lục
 
 1. [Export model trước khi deploy lên RB3](#1-export-model-trước-khi-deploy-lên-rb3)
-2. [Cập nhật README — Ongoing Work](#2-cập-nhật-readme--ongoing-work)
 
 ---
 

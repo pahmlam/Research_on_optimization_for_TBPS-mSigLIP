@@ -100,6 +100,14 @@ Our method with Curriculum Learning achieves State-of-the-Art performance, signi
 
 *Best result with seed 2400. Mean over 3 seeds: R@1 = 51.52 +/- 0.68%.*
 
+### Quantitative Performance (10% CUHK-PEDES, English)
+
+| Method                       | R@1   | R@5   | R@10  | mAP   | mINP  |
+| ---------------------------- | ----- | ------| ----- | ----- | ----- |
+| TBPS-mSigLIP (Baseline)      | 46.73 | 68.65 | 77.55 | 41.75 | 26.56 |
+| Ours (LoRA + Circle Fixed)   | 56.87 | **77.18** | 84.15 | 50.70 | 34.61 |
+| **Ours (LoRA + Curriculum)** | **57.10** | 76.98 | **84.34** | **50.90** | **34.85** |
+
 ### Quantitative Performance (PRW-TPS-CN, Chinese)
 
 | Method                       | R@1   | R@5   | R@10  | mAP   | mINP  |
