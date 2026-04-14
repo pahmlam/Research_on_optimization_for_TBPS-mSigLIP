@@ -36,7 +36,7 @@ All scripts in `scripts/` and `hardware_profiling/` auto-log terminal output to 
 ```
 Training (GPU server)           →  Export (dev machine)        →  Deploy (RB3 Gen2)
 ━━━━━━━━━━━━━━━━━━━             ━━━━━━━━━━━━━━━━━━━           ━━━━━━━━━━━━━━━━━━━
-trainer.py                         export_inference.py            inference_test.py
+trainer.py                         lora_fp16/export.py            inference_test.py
 epoch=53.ckpt (1.4 GB)      →     model_fp16.pt (~740 MB)   →   torch.load() + inference
                                    - Strip optimizer states
                                    - Merge LoRA into base

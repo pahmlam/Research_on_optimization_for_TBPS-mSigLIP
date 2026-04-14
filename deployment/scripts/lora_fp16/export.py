@@ -218,7 +218,7 @@ def main():
         export_onnx(lit_model, config, args.output_dir)
 
     print(f"\nDone! All files saved to: {args.output_dir}/")
-    print("\nNext: transfer exported_model/ to RB3 and run 03_inference_test.py")
+    print("\nNext: transfer exported_model/ to RB3 and run deployment/scripts/inference_test.py")
 
 
 if __name__ == "__main__":

@@ -3,13 +3,13 @@ Step 3: Run inference test on target device (Qualcomm RB3 Gen2 or any CPU machin
 Tests model loading, single-sample inference, latency, and memory usage.
 
 Usage (PyTorch FP16):
-    python 03_inference_test.py \
+    python deployment/scripts/inference_test.py \
         --model-dir exported_model \
         --dtype fp16 \
         --dataset-root /path/to/VN3K
 
 Usage (ONNX):
-    python 03_inference_test.py \
+    python deployment/scripts/inference_test.py \
         --model-dir exported_model \
         --backend onnx \
         --dataset-root /path/to/VN3K

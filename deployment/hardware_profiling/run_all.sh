@@ -23,11 +23,11 @@ echo ""
 
 # Step 1: Collect system info
 echo "[1/3] Collecting system information..."
-./01_collect_sysinfo.sh
+./collect_sysinfo.sh
 
 # Step 2: Run benchmarks
 echo "[2/3] Running proxy model benchmarks..."
-python 03_benchmark.py
+python benchmark.py
 
 # Step 3: Summary
 echo "[3/3] Generating summary..."

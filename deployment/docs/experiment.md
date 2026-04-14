@@ -58,7 +58,7 @@ python3 -m venv venv
 source venv/bin/activate
 
 # Install dependencies
-./02_install_deps.sh
+./install_deps.sh
 ```
 
 ### Step 4: Activate Environment
@@ -68,13 +68,13 @@ source venv/bin/activate
 
 ### Step 5: Collect System Information
 ```bash
-./01_collect_sysinfo.sh
+./collect_sysinfo.sh
 # Output: system_info.md
 ```
 
 ### Step 6: Run Benchmarks
 ```bash
-python 03_benchmark.py
+python benchmark.py
 # Outputs:
 # benchmark_results.json (raw data)
 # benchmark_report.md (formatted report)
@@ -215,9 +215,9 @@ snpe-net-run \
 ### 8.1 Scripts (`~/sigm/`)
 | File | Description | Usage |
 | :--- | :--- | :--- |
-| `01_collect_sysinfo.sh` | Collect system info | `./01_collect_sysinfo.sh` |
-| `02_install_deps.sh` | Install Python deps | `./02_install_deps.sh` |
-| `03_benchmark.py` | Run benchmarks | `python 03_benchmark.py` |
+| `collect_sysinfo.sh` | Collect system info | `./collect_sysinfo.sh` |
+| `install_deps.sh` | Install Python deps | `./install_deps.sh` |
+| `benchmark.py` | Run benchmarks | `python benchmark.py` |
 | `run_all.sh` | Run everything | `./run_all.sh` |
 
 ### 8.2 Output Files
@@ -243,7 +243,7 @@ snpe-net-run \
 ### 9.1 Memory Issues
 ```bash
 # Reduce batch size
-python -c "from 03_benchmark import benchmark_pytorch"
+python -c "from benchmark import benchmark_pytorch"
 # Modify BATCH_SIZES in script to [1, 2]
 
 # Monitor memory

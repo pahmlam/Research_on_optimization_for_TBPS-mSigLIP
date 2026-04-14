@@ -221,11 +221,10 @@ snpe-onnx-to-dlc --input_network model.onnx --output_path model.dlc
 **Scripts:**
 | File | Size | Description |
 | :--- | :--- | :--- |
-| `01_collect_sysinfo.sh` | 2.4 KB | Collect system hardware/software info |
-| `02_install_deps.sh` | 731 B | Install dependencies in venv |
-| `03_benchmark.py` | 12 KB | Original benchmark script |
-| `04_full_benchmark.py` | 4.7 KB | Full PyTorch + ONNX + SNPE benchmark |
-| `05_snpe_benchmark.py` | 4.2 KB | SNPE-specific benchmark (requires DLC models) |
+| `collect_sysinfo.sh` | 2.4 KB | Collect system hardware/software info |
+| `install_deps.sh` | 731 B | Install dependencies in venv |
+| `benchmark.py` | 12 KB | Original benchmark script |
+| `snpe_benchmark.py` | 4.2 KB | SNPE-specific benchmark (requires DLC models) |
 | `run_all.sh` | 698 B | Master execution script |
 
 **Documentation:**
@@ -260,8 +259,8 @@ cd ~/sigm
 
 # Option 2: Step by step
 source venv/bin/activate
-./01_collect_sysinfo.sh
-python 03_benchmark.py
+./collect_sysinfo.sh
+python benchmark.py
 ```
 
 ---
@@ -305,7 +304,7 @@ python 03_benchmark.py
 ```bash
 cd ~/sigm
 # After obtaining DLC models, place them in dlc_models/
-python 05_snpe_benchmark.py
+python snpe_benchmark.py
 ```
 2. **Expected DSP performance gains:**
    * **MobileNetV2:** ~200-300 fps (vs 11 fps on CPU)

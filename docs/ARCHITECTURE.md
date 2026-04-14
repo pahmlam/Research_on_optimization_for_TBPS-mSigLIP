@@ -67,11 +67,11 @@ Multilingual SigLIP (`siglip-base-patch16-256-multilingual`) is a dual-encoder m
 ### Vision Encoder (ViT-B/16)
 
 ```
-Input Image (384 x 128 x 3)
+Input Image (256 x 256 x 3)
     │
     ▼ Patch Embedding (patch_size=16)
-    │ → 24 x 8 = 192 patches, each projected to 768d
-    │ + Learnable position embeddings (interpolated from 256x256 pretrained)
+    │ → 16 x 16 = 256 patches, each projected to 768d
+    │ + Learnable position embeddings (native 256x256)
     │
     ▼ 12 Transformer Blocks
     │   ┌─────────────────────────────────┐
@@ -215,19 +215,19 @@ total_loss = 1.0 * nitc_loss
 Raw Sample (image_path, caption, pid)
     │
     ├─► Image Pipeline
-    │     Resize(384x128) → ToTensor → ColorJitter → RandomRotation(15)
+    │     Resize(256x256) → ToTensor → ColorJitter → RandomRotation(15)
     │     → RandomResizedCrop(0.9-1.0) → RandomGrayscale(0.1)
     │     → RandomHorizontalFlip(0.5) → RandomErasing(0.10-0.20)
     │     → Normalize(0.5, 0.5)
-    │     Output: images (3x384x128)
+    │     Output: images (3x256x256)
     │
     ├─► Augmented Image (for MVS)
     │     Same pipeline with different random seeds
-    │     Output: aug_images (3x384x128)
+    │     Output: aug_images (3x256x256)
     │
     ├─► SimCLR Views (for SS loss)
     │     Two independent augmented views
-    │     Output: ss_images1, ss_images2 (3x384x128 each)
+    │     Output: ss_images1, ss_images2 (3x256x256 each)
     │
     ├─► Text Pipeline
     │     Tokenize(max_len=64) → RandomDeletion(p=0.05)
