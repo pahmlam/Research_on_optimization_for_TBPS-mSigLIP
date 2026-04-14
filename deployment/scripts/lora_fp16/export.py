@@ -1,20 +1,20 @@
 """
-Step 2: Export checkpoint to inference-ready formats.
-Merges LoRA into base model, strips optimizer states, converts to FP16 and optionally ONNX.
+Step 1: Export checkpoint to FP16 PyTorch format.
+Merges LoRA into base model, strips optimizer states, converts to FP16.
 
 Usage:
     python deployment/scripts/lora_fp16/export.py \
-        --ckpt epoch=53-val_score=51.30.ckpt \
-        --output-dir exported_model \
-        --format pytorch           # or: onnx, both
+        --ckpt epoch=56-val_score=52.28.ckpt \
+        --output-dir exported_model
 
 Outputs:
     exported_model/
     ├── model_fp16.pt              # PyTorch FP16 state dict (vision + text + logit params)
     ├── model_fp32.pt              # PyTorch FP32 state dict (fallback)
-    ├── config.yaml                # Resolved Hydra config from checkpoint
-    ├── vision_encoder.onnx        # (if --format onnx/both)
-    └── text_encoder.onnx          # (if --format onnx/both)
+    └── config.yaml                # Resolved Hydra config from checkpoint
+
+Next step:
+    python deployment/scripts/onnx/export.py --model-dir exported_model
 """
 
 import argparse
@@ -32,7 +32,7 @@ from utils import TeeLogger
 # Add project root to path (deployment/ → project root)
 sys.path.insert(0, os.path.dirname(_deployment_root))
 
-from omegaconf import OmegaConf, DictConfig
+from omegaconf import OmegaConf
 
 
 def resolve_tuple(*args):
@@ -46,7 +46,6 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 def load_model_from_checkpoint(ckpt_path: str):
     """Load Lightning checkpoint and reconstruct model with merged LoRA."""
     from lightning_models import LitTBPS
-    from lightning_data import TBPSDataModule
 
     print(f"Loading checkpoint: {ckpt_path}")
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
@@ -132,93 +131,19 @@ def export_pytorch(lit_model, config, output_dir: str):
     print(f"Saved config: {config_path}")
 
 
-def export_onnx(lit_model, config, output_dir: str):
-    """Export vision and text encoders as separate ONNX models."""
-    model = lit_model.model
-    model.eval()
-
-    image_size = config.backbone.vision_config.image_size
-    if isinstance(image_size, (list, tuple)):
-        h, w = image_size
-    else:
-        h = w = image_size
-
-    max_text_len = config.tokenizer.model_max_length
-
-    # --- Vision encoder ---
-    print("\nExporting vision encoder to ONNX...")
-    dummy_image = torch.randn(1, 3, h, w)
-
-    class VisionWrapper(torch.nn.Module):
-        def __init__(self, tbps_model):
-            super().__init__()
-            self.model = tbps_model
-
-        def forward(self, image):
-            return self.model.encode_image(image)
-
-    vision_path = os.path.join(output_dir, "vision_encoder.onnx")
-    torch.onnx.export(
-        VisionWrapper(model),
-        dummy_image,
-        vision_path,
-        input_names=["image"],
-        output_names=["image_embedding"],
-        dynamic_axes={"image": {0: "batch_size"}, "image_embedding": {0: "batch_size"}},
-        opset_version=17,
-    )
-    print(f"Saved: {vision_path} ({os.path.getsize(vision_path)/1024**2:.1f} MB)")
-
-    # --- Text encoder ---
-    print("Exporting text encoder to ONNX...")
-    dummy_input_ids = torch.zeros(1, max_text_len, dtype=torch.long)
-    dummy_attention_mask = torch.ones(1, max_text_len, dtype=torch.long)
-
-    class TextWrapper(torch.nn.Module):
-        def __init__(self, tbps_model):
-            super().__init__()
-            self.model = tbps_model
-
-        def forward(self, input_ids, attention_mask):
-            caption_input = {"input_ids": input_ids, "attention_mask": attention_mask}
-            return self.model.encode_text(caption_input)
-
-    text_path = os.path.join(output_dir, "text_encoder.onnx")
-    torch.onnx.export(
-        TextWrapper(model),
-        (dummy_input_ids, dummy_attention_mask),
-        text_path,
-        input_names=["input_ids", "attention_mask"],
-        output_names=["text_embedding"],
-        dynamic_axes={
-            "input_ids": {0: "batch_size"},
-            "attention_mask": {0: "batch_size"},
-            "text_embedding": {0: "batch_size"},
-        },
-        opset_version=17,
-    )
-    print(f"Saved: {text_path} ({os.path.getsize(text_path)/1024**2:.1f} MB)")
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt", required=True)
     parser.add_argument("--output-dir", default="exported_model")
-    parser.add_argument("--format", choices=["pytorch", "onnx", "both"], default="pytorch")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
 
     lit_model, config = load_model_from_checkpoint(args.ckpt)
-
-    if args.format in ("pytorch", "both"):
-        export_pytorch(lit_model, config, args.output_dir)
-
-    if args.format in ("onnx", "both"):
-        export_onnx(lit_model, config, args.output_dir)
+    export_pytorch(lit_model, config, args.output_dir)
 
     print(f"\nDone! All files saved to: {args.output_dir}/")
-    print("\nNext: transfer exported_model/ to RB3 and run deployment/scripts/inference_test.py")
+    print("\nNext step: python deployment/scripts/onnx/export.py --model-dir", args.output_dir)
 
 
 if __name__ == "__main__":

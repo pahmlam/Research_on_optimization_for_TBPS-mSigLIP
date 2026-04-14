@@ -125,8 +125,8 @@ def analyze(ckpt_path: str):
     print("RECOMMENDATIONS")
     print(f"{'='*60}")
     print("1. Export to FP16 (safest for 4GB RAM): run deployment/scripts/lora_fp16/export.py")
-    print("2. For best performance: export to ONNX + quantize to INT8")
-    print("3. LoRA weights should be merged into base model before export")
+    print("2. Convert to ONNX: run deployment/scripts/onnx/export.py --model-dir exported_model")
+    print("3. LoRA weights should be merged into base model before export (step 1 does this)")
     print("4. On RB3: set CPU governor to 'performance' for best speed")
     print("   sudo cpupower frequency-set -g performance")
 

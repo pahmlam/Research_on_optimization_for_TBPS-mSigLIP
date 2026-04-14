@@ -9,8 +9,10 @@ deployment/
 ├── scripts/                       # mSigLIP deployment pipeline
 │   ├── analyze_checkpoint.py      # Shared: Analyze checkpoint (size, RAM, compatibility)
 │   ├── inference_test.py          # Shared: Test inference on target device
-│   └── lora_fp16/                 # Approach: LoRA merge + FP16 + ONNX
-│       └── export.py              #   Export model (merge LoRA → FP16/ONNX)
+│   ├── lora_fp16/                 # Step 1: LoRA merge + FP16 export
+│   │   └── export.py              #   Merge LoRA → FP16/FP32 state dict
+│   └── onnx/                      # Step 2: ONNX conversion
+│       └── export.py              #   FP16/FP32 state dict → ONNX
 │
 ├── hardware_profiling/            # RB3 hardware capability testing (proxy models)
 │   ├── benchmark.py               # PyTorch CPU vs ONNX Runtime (MobileNetV2, ResNet18)
@@ -34,13 +36,13 @@ All scripts in `scripts/` and `hardware_profiling/` auto-log terminal output to 
 ## Deployment Pipeline
 
 ```
-Training (GPU server)           →  Export (dev machine)        →  Deploy (RB3 Gen2)
-━━━━━━━━━━━━━━━━━━━             ━━━━━━━━━━━━━━━━━━━           ━━━━━━━━━━━━━━━━━━━
-trainer.py                         lora_fp16/export.py            inference_test.py
-epoch=53.ckpt (1.4 GB)      →     model_fp16.pt (~740 MB)   →   torch.load() + inference
-                                   - Strip optimizer states
-                                   - Merge LoRA into base
-                                   - FP32 → FP16
+Training (GPU server)       →  Step 1: FP16 export        →  Step 2: ONNX         →  Deploy (RB3 Gen2)
+━━━━━━━━━━━━━━━━━━━            ━━━━━━━━━━━━━━━━━━━           ━━━━━━━━━━━━━         ━━━━━━━━━━━━━━━━━━━
+trainer.py                     lora_fp16/export.py            onnx/export.py         inference_test.py
+epoch=53.ckpt (1.4 GB)  →     model_fp16.pt (~740 MB)  →    *.onnx            →   ONNX Runtime inference
+                               - Strip optimizer states
+                               - Merge LoRA into base
+                               - FP32 → FP16
 ```
 
 ## Target Device
@@ -62,15 +64,21 @@ All scripts auto-log to `deployment/logs/` with timestamps.
 python deployment/scripts/analyze_checkpoint.py --ckpt path/to/checkpoint.ckpt
 ```
 
-### 2. Export model (LoRA merge + FP16 + ONNX)
+### 2. Export to FP16 (merge LoRA + strip optimizer)
 ```bash
 python deployment/scripts/lora_fp16/export.py \
-    --ckpt epoch=53-val_score=51.30.ckpt \
-    --output-dir exported_model \
-    --format both  # pytorch + onnx
+    --ckpt epoch=56-val_score=52.28.ckpt \
+    --output-dir exported_model
 ```
 
-### 3. Test inference
+### 3. Convert to ONNX
+```bash
+python deployment/scripts/onnx/export.py \
+    --model-dir exported_model \
+    --precision fp32              # fp32 recommended for ONNX stability
+```
+
+### 4. Test inference
 ```bash
 python deployment/scripts/inference_test.py \
     --model-dir exported_model \
@@ -78,7 +86,7 @@ python deployment/scripts/inference_test.py \
     --dataset-root /path/to/VN3K
 ```
 
-### 4. Hardware profiling on RB3 (proxy models)
+### 5. Hardware profiling on RB3 (proxy models)
 ```bash
 # SSH to RB3, copy hardware_profiling/ to device
 cd ~/sigm
