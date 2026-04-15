@@ -108,12 +108,12 @@ class TextWrapper(nn.Module):
 def export_onnx(model, config, output_dir: str):
     """Export vision and text encoders as separate ONNX models."""
     image_size = config.backbone.vision_config.image_size
-    if isinstance(image_size, (list, tuple)):
-        h, w = image_size
-    else:
-        h = w = image_size
+    try:
+        h, w = int(image_size[0]), int(image_size[1])
+    except (TypeError, IndexError):
+        h = w = int(image_size)
 
-    max_text_len = config.tokenizer.model_max_length
+    max_text_len = int(config.tokenizer.model_max_length)
 
     # --- Vision encoder ---
     print("\nExporting vision encoder to ONNX...")
@@ -127,7 +127,7 @@ def export_onnx(model, config, output_dir: str):
         input_names=["image"],
         output_names=["image_embedding"],
         dynamic_axes={"image": {0: "batch_size"}, "image_embedding": {0: "batch_size"}},
-        opset_version=17,
+        opset_version=18,
     )
     print(f"Saved: {vision_path} ({os.path.getsize(vision_path) / 1024**2:.1f} MB)")
 
@@ -148,7 +148,7 @@ def export_onnx(model, config, output_dir: str):
             "attention_mask": {0: "batch_size"},
             "text_embedding": {0: "batch_size"},
         },
-        opset_version=17,
+        opset_version=18,
     )
     print(f"Saved: {text_path} ({os.path.getsize(text_path) / 1024**2:.1f} MB)")
 
