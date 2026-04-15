@@ -45,9 +45,12 @@ def run(config: DictConfig) -> None:
     test_loader = dm.test_dataloader()
 
     # Preparing the model
+    # num_train_samples is used by NACIR to size per-sample loss/clean-weight
+    # buffers. It is harmless (remains 0) when NACIR is disabled.
     model = LitTBPS(
         config,
         num_iters_per_epoch=len(train_loader),
+        num_train_samples=len(dm.train_set),
     )
     if config.get("lora", None):
         lora_config = config.lora

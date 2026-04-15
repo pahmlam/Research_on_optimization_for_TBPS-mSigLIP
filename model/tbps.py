@@ -5,7 +5,7 @@ from loguru import logger
 from model import objectives
 
 class TBPS(nn.Module):
-    def __init__(self, config, backbone):
+    def __init__(self, config, backbone, num_train_samples: int = 0):
         super().__init__()
         self.config = config
 
@@ -24,6 +24,26 @@ class TBPS(nn.Module):
         if config.loss.get("SS", None):
             self.simclr_mlp = self._build_mlp(
                 self.embed_dim, self.embed_dim, self.embed_dim
+            )
+
+        # --- Noise-Aware Circle Loss state (Idea C) ---
+        # Only instantiate when NACIR is enabled; otherwise stays None to avoid
+        # checkpointing unused buffers.
+        self.noise_state = None
+        if config.loss.get("NACIR", None):
+            if num_train_samples <= 0:
+                raise ValueError(
+                    "NACIR requires num_train_samples > 0 to size per-sample buffers. "
+                    "Pass it from LitTBPS via trainer.py."
+                )
+            from model.noise_aware import NoiseAwareCircleState
+
+            nacir_cfg = config.loss.get("nacir_config", {})
+            self.noise_state = NoiseAwareCircleState(num_train_samples, nacir_cfg)
+            logger.info(
+                f"NACIR enabled: num_train_samples={num_train_samples}, "
+                f"fn_enable_epoch={self.noise_state.fn_enable_epoch}, "
+                f"fp_enable_epoch={self.noise_state.fp_enable_epoch}"
             )
 
     def _build_mlp(self, in_dim=512, mlp_dim=128, out_dim=512):
@@ -210,7 +230,9 @@ class TBPS(nn.Module):
             ret.update({"nitc_loss": nitc_loss * self.config.loss.nitc_loss_weight})
 
         # --- C. Cross-Modal Circle Loss (Curriculum) ---
-        if self.config.loss.get("CIR", None) and current_circle_weight > 0:
+        # Skip the vanilla CIR path when NACIR is enabled — NACIR replaces it.
+        nacir_enabled = self.config.loss.get("NACIR", None) and self.noise_state is not None
+        if self.config.loss.get("CIR", None) and not nacir_enabled and current_circle_weight > 0:
             circle_m = self.config.loss.get("circle_margin", 0.25)
             circle_gamma = self.config.loss.get("circle_gamma", 128)
 
@@ -240,8 +262,84 @@ class TBPS(nn.Module):
 
             ret.update({"circle_loss": final_circle_loss * current_circle_weight})
 
-        elif self.config.loss.get("CIR", None):
+        elif self.config.loss.get("CIR", None) and not nacir_enabled:
             ret.update({"circle_loss": torch.tensor(0.0, device=image_pooler_output.device, requires_grad=True)})
+
+        # --- C2. Noise-Aware Circle Loss (Idea C) ---
+        # Reuses the same curriculum weight as CIR. Detectors activate at
+        # configured epoch thresholds (fn_enable_epoch, fp_enable_epoch).
+        if nacir_enabled and current_circle_weight > 0:
+            circle_m = self.config.loss.get("circle_margin", 0.25)
+            circle_gamma = self.config.loss.get("circle_gamma", 128)
+
+            # --- Gate detectors by curriculum epoch ---
+            fn_active = current_epoch >= self.noise_state.fn_enable_epoch
+            fp_active = current_epoch >= self.noise_state.fp_enable_epoch
+
+            fn_stats = self.noise_state.get_fn_stats_dict() if fn_active else None
+            clean_weights = None
+            if fp_active and "id" in batch:
+                clean_weights = self.noise_state.get_clean_weights_for_batch(batch["id"])
+
+            # --- Primary forward on clean images ---
+            nacir_loss, diag = objectives.compute_noise_aware_circle(
+                image_features=image_pooler_output,
+                text_features=caption_pooler_output,
+                pids=batch["pids"],
+                m=circle_m,
+                gamma=circle_gamma,
+                fn_stats=fn_stats,
+                clean_weights=clean_weights,
+                epsilon_n=self.noise_state.epsilon_n,
+                epsilon_p=self.noise_state.epsilon_p,
+            )
+
+            final_nacir_loss = nacir_loss
+
+            # --- MVS augmentation path (mirror of CIR MVS pattern) ---
+            if self.config.loss.get("MVS", None):
+                if 'aug_images_features' not in locals():
+                    aug_images = batch["aug_images"]
+                    aug_images_features = self.encode_image(aug_images)
+
+                aug_nacir_loss, _ = objectives.compute_noise_aware_circle(
+                    image_features=aug_images_features,
+                    text_features=caption_pooler_output,
+                    pids=batch["pids"],
+                    m=circle_m,
+                    gamma=circle_gamma,
+                    fn_stats=fn_stats,
+                    clean_weights=clean_weights,
+                    epsilon_n=self.noise_state.epsilon_n,
+                    epsilon_p=self.noise_state.epsilon_p,
+                )
+                final_nacir_loss = (nacir_loss + aug_nacir_loss) / 2
+
+            ret.update({"nacir_loss": final_nacir_loss * current_circle_weight})
+
+            # --- Update state (no_grad operations) ---
+            self.noise_state.update_ema_stats(diag["s_p"], diag["s_n"])
+            if "id" in batch:
+                self.noise_state.update_sample_losses(
+                    batch["id"], diag["per_sample_loss"]
+                )
+
+            # --- Diagnostics for W&B logging ---
+            # Prefix scalar diagnostics so they don't accidentally get summed
+            # into total_loss (Lightning sums only keys ending in "loss").
+            ret.update({
+                "nacir_fn_prob_mean": torch.tensor(diag["fn_prob_mean"], device=image_pooler_output.device),
+                "nacir_clean_weight_mean": torch.tensor(diag["clean_weight_mean"], device=image_pooler_output.device),
+                "nacir_alpha_n_scale_mean": torch.tensor(diag["alpha_n_scale_mean"], device=image_pooler_output.device),
+                "nacir_alpha_p_scale_mean": torch.tensor(diag["alpha_p_scale_mean"], device=image_pooler_output.device),
+                "nacir_fn_active": torch.tensor(1.0 if fn_active else 0.0, device=image_pooler_output.device),
+                "nacir_fp_active": torch.tensor(1.0 if fp_active else 0.0, device=image_pooler_output.device),
+            })
+
+        elif nacir_enabled:
+            # Curriculum weight is 0 — still populate nacir_loss so the key exists
+            # in the returned dict for consistent logging.
+            ret.update({"nacir_loss": torch.tensor(0.0, device=image_pooler_output.device, requires_grad=True)})
 
         # --- D. C-ITC ---
         if self.config.loss.get("CITC", None):

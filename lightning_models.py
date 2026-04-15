@@ -82,6 +82,7 @@ class LitTBPS(L.LightningModule):
         self,
         config,
         num_iters_per_epoch,
+        num_train_samples: int = 0,
     ):
         super().__init__()
 
@@ -90,7 +91,7 @@ class LitTBPS(L.LightningModule):
         self._initialize_state()
 
         try:
-            self._initialize_model(num_iters_per_epoch)
+            self._initialize_model(num_iters_per_epoch, num_train_samples)
         except Exception as e:
             raise ModelException(f"Failed to initialize model: {str(e)}")
 
@@ -103,6 +104,7 @@ class LitTBPS(L.LightningModule):
     def _initialize_model(
         self,
         num_iters_per_epoch: int,
+        num_train_samples: int = 0,
     ) -> None:
         """Initialize model components and configuration"""
         self.num_iters_per_epoch = (
@@ -114,6 +116,7 @@ class LitTBPS(L.LightningModule):
         self.model = TBPS(
             config=self.config,
             backbone=self.backbone,
+            num_train_samples=num_train_samples,
         )
 
     def _initialize_state(self) -> None:
@@ -205,6 +208,47 @@ class LitTBPS(L.LightningModule):
         norms = grad_norm(self.model, norm_type=2)
         all_norms = norms[f"grad_{float(2)}_norm_total"]
         self.log("grad_norm", all_norms, on_step=True, on_epoch=True, prog_bar=True)
+
+    def on_train_epoch_end(self) -> None:
+        """
+        Periodically refit the 2-component GMM used by NACIR's FP detection.
+
+        The refit runs at most once per epoch, only when:
+          - NACIR is enabled (noise_state exists)
+          - Current epoch >= fp_enable_epoch
+          - Current epoch is on the refit cadence (every gmm_refit_interval)
+          - At least some samples have been seen (non-empty buffer)
+
+        Diagnostics (GMM separation, component means/stds, fallback flag) are
+        logged to W&B under keys prefixed with "gmm_".
+        """
+        noise_state = getattr(self.model, "noise_state", None)
+        if noise_state is None:
+            return
+
+        epoch = self.trainer.current_epoch
+        if epoch < noise_state.fp_enable_epoch:
+            return
+        if (epoch - noise_state.fp_enable_epoch) % noise_state.gmm_refit_interval != 0:
+            return
+        if not noise_state.sample_seen.any():
+            return
+
+        try:
+            diag = noise_state.refit_gmm()
+            logger.info(
+                f"[epoch {epoch}] GMM refit: separation={diag['separation']:.3f}, "
+                f"mu_clean={diag['mu_clean']:.4f}, mu_noisy={diag['mu_noisy']:.4f}, "
+                f"fallback={bool(diag['fallback'])}, "
+                f"n_samples={int(diag['n_samples_used'])}"
+            )
+            self.log_dict(
+                {f"gmm_{k}": float(v) for k, v in diag.items()},
+                on_epoch=True,
+            )
+        except Exception as e:
+            # GMM refit is non-critical — never crash training if EM fails.
+            logger.error(f"GMM refit failed at epoch {epoch}: {e}")
 
     ############# END TRAINING FUNCTIONS #############
 

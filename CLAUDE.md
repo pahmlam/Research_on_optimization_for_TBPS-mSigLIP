@@ -82,7 +82,7 @@ Total loss = `1.0*N-ITC + curriculum*Circle + 0.1*C-ITC + 0.4*SimCLR`
 | Loss | Weight | Role |
 |------|--------|------|
 | N-ITC | 1.0 | Primary alignment (sigmoid contrastive, +MVS augmentation) |
-| Circle Loss | 0→0.1 (curriculum) | Hard-negative mining (m=0.35, gamma=128) |
+| Circle Loss | 0→0.1 (curriculum) | Hard-negative mining (m=0.25, gamma=128) |
 | C-ITC | 0.1 | Cyclic consistency regularization |
 | SimCLR | 0.4 | Self-supervised visual consistency |
 

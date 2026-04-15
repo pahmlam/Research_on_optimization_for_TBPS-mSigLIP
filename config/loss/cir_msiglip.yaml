@@ -16,3 +16,23 @@ citc_loss_weight: 0.1
 SS: true
 simclr_temperature: 0.1
 ss_loss_weight: 0.4
+
+# Noise-Aware Circle Loss (Idea C — unified FN + FP detection)
+# When NACIR is true, the regular CIR branch is skipped in tbps.py.
+# Reuses the same circle_loss_weight / circle_margin / circle_gamma as CIR.
+NACIR: false
+
+nacir_config:
+  # EMA similarity statistics (for Bayesian FN detection on the negative branch)
+  ema_beta: 0.99
+  fn_prior: 0.01
+  epsilon_n: 0.1
+  # Per-sample loss tracking (for GMM-based FP detection on the positive branch)
+  loss_ema_alpha: 0.9
+  epsilon_p: 0.2
+  gmm_refit_interval: 5
+  gmm_min_separation: 1.0
+  # Curriculum epoch gates for detector activation.
+  # FN turns on first (EMA stabilizes fast); FP turns on later (GMM needs history).
+  fn_enable_epoch: 11
+  fp_enable_epoch: 15
