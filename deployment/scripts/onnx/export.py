@@ -105,8 +105,22 @@ class TextWrapper(nn.Module):
         return self.model.encode_text(caption_input)
 
 
+def _onnx_dir_size_mb(onnx_path: str) -> float:
+    """Total size of .onnx + .onnx.data (external weights) in MB."""
+    total = os.path.getsize(onnx_path)
+    data_path = onnx_path + ".data"
+    if os.path.exists(data_path):
+        total += os.path.getsize(data_path)
+    return total / 1024**2
+
+
 def export_onnx(model, config, output_dir: str):
-    """Export vision and text encoders as separate ONNX models."""
+    """Export vision and text encoders as separate ONNX models.
+
+    Each encoder is saved in its own subdirectory (vision_onnx/, text_onnx/)
+    so that Qualcomm AI Hub can upload the .onnx + .onnx.data pair together
+    via the directory format: --model exported_model/vision_onnx/
+    """
     image_size = config.backbone.vision_config.image_size
     try:
         h, w = int(image_size[0]), int(image_size[1])
@@ -119,7 +133,9 @@ def export_onnx(model, config, output_dir: str):
     print("\nExporting vision encoder to ONNX...")
     dummy_image = torch.randn(1, 3, h, w)
 
-    vision_path = os.path.join(output_dir, "vision_encoder.onnx")
+    vision_dir = os.path.join(output_dir, "vision_onnx")
+    os.makedirs(vision_dir, exist_ok=True)
+    vision_path = os.path.join(vision_dir, "vision_encoder.onnx")
     torch.onnx.export(
         VisionWrapper(model),
         dummy_image,
@@ -129,14 +145,16 @@ def export_onnx(model, config, output_dir: str):
         dynamic_axes={"image": {0: "batch_size"}, "image_embedding": {0: "batch_size"}},
         opset_version=18,
     )
-    print(f"Saved: {vision_path} ({os.path.getsize(vision_path) / 1024**2:.1f} MB)")
+    print(f"Saved: {vision_dir}/ ({_onnx_dir_size_mb(vision_path):.1f} MB total)")
 
     # --- Text encoder ---
     print("\nExporting text encoder to ONNX...")
     dummy_input_ids = torch.zeros(1, max_text_len, dtype=torch.long)
     dummy_attention_mask = torch.ones(1, max_text_len, dtype=torch.long)
 
-    text_path = os.path.join(output_dir, "text_encoder.onnx")
+    text_dir = os.path.join(output_dir, "text_onnx")
+    os.makedirs(text_dir, exist_ok=True)
+    text_path = os.path.join(text_dir, "text_encoder.onnx")
     torch.onnx.export(
         TextWrapper(model),
         (dummy_input_ids, dummy_attention_mask),
@@ -150,7 +168,7 @@ def export_onnx(model, config, output_dir: str):
         },
         opset_version=18,
     )
-    print(f"Saved: {text_path} ({os.path.getsize(text_path) / 1024**2:.1f} MB)")
+    print(f"Saved: {text_dir}/ ({_onnx_dir_size_mb(text_path):.1f} MB total)")
 
 
 def main():
@@ -163,8 +181,12 @@ def main():
     model, config = load_model_from_exported(args.model_dir, args.precision)
     export_onnx(model, config, args.model_dir)
 
-    print(f"\nDone! ONNX models saved to: {args.model_dir}/")
-    print("Next: run deployment/scripts/inference_test.py or convert to SNPE")
+    print(f"\nDone! ONNX models saved to:")
+    print(f"  Vision: {args.model_dir}/vision_onnx/")
+    print(f"  Text:   {args.model_dir}/text_onnx/")
+    print("\nFor Qualcomm AI Hub, pass the directory (not the .onnx file):")
+    print(f"  qai-hub submit-compile-job --model {args.model_dir}/vision_onnx/ ...")
+    print("\nNext: run deployment/scripts/inference_test.py or convert to SNPE")
 
 
 if __name__ == "__main__":

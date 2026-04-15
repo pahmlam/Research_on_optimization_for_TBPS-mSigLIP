@@ -1,4 +1,4 @@
-Logging to: /Users/phamtunglam/Documents/Projects/mSigLIP/code/deployment/logs/export_onnx_20260415_100612.log
+Logging to: /Users/phamtunglam/Documents/Projects/mSigLIP/code/deployment/logs/export_onnx_20260415_102552.log
 Loading config: exported_model/config.yaml
 Loading state dict: exported_model/model_fp32.pt
 Building backbone from config...
@@ -34,4 +34,4 @@ Saved: exported_model/text_encoder.onnx (1.4 MB)
 Done! ONNX models saved to: exported_model/
 Next: run deployment/scripts/inference_test.py or convert to SNPE
 
-Log saved: /Users/phamtunglam/Documents/Projects/mSigLIP/code/deployment/logs/export_onnx_20260415_100612.log
+Log saved: /Users/phamtunglam/Documents/Projects/mSigLIP/code/deployment/logs/export_onnx_20260415_102552.log

@@ -140,6 +140,8 @@ The notebook operates on `W` — a dict of extracted embeddings from a checkpoin
 - `experiments/` — Experiment logs and ablation notes
 - `ref/rde/` — RDE (CVPR 2024) reference implementation for noise-robust learning
 - `deployment/README.md` — Edge deployment overview
+- `deployment/docs/deployment-plan.md` — **Current deployment state, pipeline status, next steps** (start here for deployment work)
+- `deployment/docs/aihub-experiments.md` — Running log of every Qualcomm AI Hub compile attempt (rule: append a row on every `qai-hub` invocation — see `.claude/rules/aihub-experiments.md`)
 - `deployment/docs/system.md` — Qualcomm RB3 Gen2 hardware specifications
 
 ## Knowledge Documentation Rule

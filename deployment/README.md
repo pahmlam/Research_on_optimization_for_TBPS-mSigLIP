@@ -22,6 +22,8 @@ deployment/
 │   └── run_all.sh                 # Run full hardware profiling suite
 │
 ├── docs/                          # Documentation
+│   ├── deployment-plan.md         # ** START HERE ** — full deployment plan, status, next steps
+│   ├── aihub-experiments.md       # Running log of every qai-hub compile attempt
 │   ├── system.md                  # RB3 Gen2 hardware specifications
 │   ├── experiment.md              # Benchmark step-by-step guide
 │   └── benchmark-rp.md            # Hardware benchmark results
@@ -36,13 +38,11 @@ All scripts in `scripts/` and `hardware_profiling/` auto-log terminal output to 
 ## Deployment Pipeline
 
 ```
-Training (GPU server)       →  Step 1: FP16 export        →  Step 2: ONNX         →  Deploy (RB3 Gen2)
-━━━━━━━━━━━━━━━━━━━            ━━━━━━━━━━━━━━━━━━━           ━━━━━━━━━━━━━         ━━━━━━━━━━━━━━━━━━━
-trainer.py                     lora_fp16/export.py            onnx/export.py         inference_test.py
-epoch=53.ckpt (1.4 GB)  →     model_fp16.pt (~740 MB)  →    *.onnx            →   ONNX Runtime inference
-                               - Strip optimizer states
-                               - Merge LoRA into base
-                               - FP32 → FP16
+Training          →  Step 1: FP16       →  Step 2: ONNX     →  Step 3: QNN Compile    →  Deploy (RB3 Gen2)
+━━━━━━━━━━━━━        ━━━━━━━━━━━━━━━       ━━━━━━━━━━━━━       ━━━━━━━━━━━━━━━━━━        ━━━━━━━━━━━━━━━━━━━
+trainer.py           lora_fp16/export.py   onnx/export.py      Qualcomm AI Hub           snpe-net-run
+epoch=56.ckpt  →     model_fp16.pt   →    *_onnx/        →    *.bin (QNN context)  →   DSP/HTP inference
+(1.4 GB)             (~740 MB)             (dir w/ weights)    (compiled for QCS6490)
 ```
 
 ## Target Device
@@ -78,7 +78,36 @@ python deployment/scripts/onnx/export.py \
     --precision fp32              # fp32 recommended for ONNX stability
 ```
 
-### 4. Test inference
+### 4. Compile for DSP/HTP via Qualcomm AI Hub
+
+Requires a Qualcomm AI Hub account ([aihub.qualcomm.com](https://aihub.qualcomm.com/)).
+
+```bash
+pip install qai-hub
+qai-hub configure --api_token YOUR_TOKEN
+```
+
+```bash
+# Vision encoder (pass directory, not .onnx file — includes external weights)
+qai-hub submit-compile-job \
+    --model exported_model/vision_onnx/ \
+    --device "Dragonwing RB3 Gen 2 Vision Kit" \
+    --compile_options " --target_runtime qnn_context_binary" \
+    --name "mSigLIP-vision" \
+    --wait
+
+# Text encoder
+qai-hub submit-compile-job \
+    --model exported_model/text_onnx/ \
+    --device "Dragonwing RB3 Gen 2 Vision Kit" \
+    --compile_options " --target_runtime qnn_context_binary" \
+    --name "mSigLIP-text" \
+    --wait
+```
+
+Available `--target_runtime` options: `qnn_context_binary` (DSP/HTP, recommended), `qnn_dlc` (legacy SNPE), `onnx`, `tflite`, `precompiled_qnn_onnx`.
+
+### 5. Test inference (ONNX Runtime on CPU)
 ```bash
 python deployment/scripts/inference_test.py \
     --model-dir exported_model \
@@ -86,7 +115,17 @@ python deployment/scripts/inference_test.py \
     --dataset-root /path/to/VN3K
 ```
 
-### 5. Hardware profiling on RB3 (proxy models)
+### 6. Run on DSP/HTP (on RB3)
+```bash
+# Transfer compiled models to RB3, then:
+snpe-net-run \
+    --container vision_encoder.bin \
+    --input_list input_list.txt \
+    --use_dsp \
+    --perf_profile high_performance
+```
+
+### 7. Hardware profiling on RB3 (proxy models)
 ```bash
 # SSH to RB3, copy hardware_profiling/ to device
 cd ~/sigm
